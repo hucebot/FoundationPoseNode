@@ -1,0 +1,113 @@
+# FROM nvidia/cudagl:11.3.0-devel-ubuntu20.04
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
+
+ENV TZ=US/Pacific
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+RUN apt-get update --fix-missing && \
+    apt-get install -y libgtk2.0-dev && \
+    apt-get install -y wget bzip2 ca-certificates curl git vim tmux g++ gcc build-essential cmake checkinstall gfortran libjpeg8-dev libtiff5-dev pkg-config yasm libavcodec-dev && \
+    apt-get install -y wget libavformat-dev libswscale-dev libdc1394-dev libxine2-dev libv4l-dev qtbase5-dev qt5-qmake libgtk2.0-dev libtbb-dev libatlas-base-dev libfaac-dev && \
+    apt-get install -y wget libmp3lame-dev libtheora-dev libvorbis-dev libxvidcore-dev libopencore-amrnb-dev libopencore-amrwb-dev x264 v4l-utils libprotobuf-dev protobuf-compiler && \
+    apt-get install -y wget libgoogle-glog-dev libgflags-dev libgphoto2-dev libhdf5-dev doxygen libflann-dev libboost-all-dev proj-data libproj-dev libyaml-cpp-dev cmake-curses-gui && \
+    apt-get install -y wget libzmq3-dev freeglut3-dev
+
+
+RUN cd / && git clone https://github.com/pybind/pybind11 &&\
+    cd pybind11 && git checkout v2.10.0 &&\
+    mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DPYBIND11_INSTALL=ON -DPYBIND11_TEST=OFF &&\
+    make -j6 && make install
+
+
+RUN cd / && wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz &&\
+    tar xvzf ./eigen-3.4.0.tar.gz &&\
+    cd eigen-3.4.0 &&\
+    mkdir build &&\
+    cd build &&\
+    cmake .. &&\
+    make install
+
+SHELL ["/bin/bash", "--login", "-c"]
+
+###### Install Python Dependencies
+RUN apt-get install -y \
+    python-is-python3 \
+    python3-pip
+
+RUN pip install "setuptools<81"
+
+RUN pip install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+
+RUN pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable" --no-build-isolation
+
+RUN pip install scipy joblib scikit-learn ruamel.yaml trimesh pyyaml opencv-python imageio open3d transformations warp-lang einops kornia pyrender "cython>=0.29.37"
+
+RUN cd / && git clone --recursive https://github.com/NVIDIAGameWorks/kaolin
+RUN cd /kaolin && TORCH_CUDA_ARCH_LIST="6.0;6.1;6.2;7.0;7.5;8.0;8.6;9.0" FORCE_CUDA=1 pip install -e . --no-build-isolation
+
+RUN python3 -m pip install --upgrade pip
+RUN pip install --upgrade setuptools
+RUN cd / && git clone https://github.com/NVlabs/nvdiffrast && cd /nvdiffrast && \
+    TORCH_CUDA_ARCH_LIST="6.0;6.1;6.2;7.0;7.5;8.0;8.6;9.0" python3 -m pip install . --no-build-isolation --no-cache-dir
+RUN python3 -c "import nvdiffrast.torch as dr; print('nvdiffrast OK')"
+
+ENV OPENCV_IO_ENABLE_OPENEXR=1
+
+RUN pip install scikit-image meshcat webdataset omegaconf pypng roma seaborn opencv-contrib-python 
+
+RUN pip install openpyxl wandb imgaug Ninja xlsxwriter timm albumentations xatlas rtree nodejs jupyterlab objaverse g4f ultralytics==8.0.120 pycocotools videoio numba
+
+RUN pip install h5py
+
+
+
+ENV ROS_DISTRO=humble
+ 
+RUN apt-get update && apt-get upgrade -yy
+
+###### Install ROS2
+RUN apt-get install -y \
+    curl \
+    gnupg2 \
+    lsb-release
+
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+RUN apt-get update && apt-get upgrade -y
+RUN apt install ros-humble-desktop-full -y
+RUN apt install ros-dev-tools -y
+RUN pip install "setuptools<81"
+RUN rosdep init && rosdep update
+
+###### Install ROS Dependencies
+RUN apt install -y \
+    ros-${ROS_DISTRO}-cv-bridge \
+    ros-${ROS_DISTRO}-rviz2
+
+###### Set up ROS2 for conda environment (Python 3.10)
+# ROS2 apt packages are built for Python 3.10, which matches our conda environment
+# Add ROS2 Python packages to PYTHONPATH so they can be imported in conda
+RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc && \
+    echo "export LD_LIBRARY_PATH=/opt/ros/humble/lib:\$LD_LIBRARY_PATH" >> ~/.bashrc && \
+    echo "export AMENT_PREFIX_PATH=/opt/ros/humble:\$AMENT_PREFIX_PATH" >> ~/.bashrc && \
+    echo "export ROS_DOMAIN_ID=0" >> ~/.bashrc && \
+    echo "export PYTHONPATH=/opt/ros/humble/lib/python3.10/site-packages:\$PYTHONPATH" >> ~/.bashrc
+
+###### Update Buffer
+RUN sysctl net.ipv4.ipfrag_time=3
+RUN sysctl net.ipv4.ipfrag_high_thresh=134217728
+
+RUN echo "export FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA?max_msg_size=1MB&soets_size=1MB&non_blocking=true&tcp_negotiation_timeout=50" >> ~/.bashrc
+
+###### Source ROS2 and workspace (ros2_ws only if present, e.g. mounted)
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc
+RUN echo "[ -f /ros2_ws/install/setup.bash ] && source /ros2_ws/install/setup.bash" >> ~/.bashrc
+
+
+## Fix some versions
+RUN pip install ultralytics==8.4
+
+
+# Setup shell
+ENV SHELL=/bin/bash
+RUN ln -sf /bin/bash /bin/sh

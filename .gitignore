@@ -1,0 +1,7 @@
+.vscode/
+__pycache__/
+debug_node/
+*.pt
+assets/
+build/
+*.pth
