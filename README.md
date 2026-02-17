@@ -58,4 +58,24 @@ docker build --network host -f docker/dockerfile -t foundationposev2 .
 ## Run
 ```
 bash ./docker/run_container.sh 
+python node.py
 ```
+
+## Parameters
+
+- `mesh_file`
+- `target_object`
+- `est_refine_iter`
+- `track_refine_iter`
+- `debug`
+- `debug_dir`
+- `depth_scale`
+- `color_topic`
+- `depth_topic`
+- `camera_info_topic`
+- `pose_frame_id`
+- `slop`
+- `seg_model_name`
+- `resize_factor`
+- `min_initial_detection_counter`
+- `enable_pose_tracking`
