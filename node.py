@@ -435,7 +435,7 @@ class FoundationPoseROS2Node(Node):
             pose_msg.pose.position.x = float(t[0])
             pose_msg.pose.position.y = float(t[1])
             pose_msg.pose.position.z = float(t[2])
-            q = r.as_quat()
+            q = Rotation.from_matrix(pose[:3, :3]).as_quat()
             pose_msg.pose.orientation.x = float(q[0])
             pose_msg.pose.orientation.y = float(q[1])
             pose_msg.pose.orientation.z = float(q[2])

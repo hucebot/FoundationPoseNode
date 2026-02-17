@@ -103,6 +103,8 @@ RUN echo "export FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA?max_msg_size=1MB&soets_si
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc
 RUN echo "[ -f /ros2_ws/install/setup.bash ] && source /ros2_ws/install/setup.bash" >> ~/.bashrc
 
+RUN apt-get update && apt-get install -y ros-humble-rmw-cyclonedds-cpp
+RUN echo "export ROS_DOMAIN_ID=1" >> ~/.bashrc
 
 ## Fix some versions
 RUN pip install ultralytics==8.4
