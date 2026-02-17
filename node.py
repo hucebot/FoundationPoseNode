@@ -26,6 +26,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import CompressedImage, CameraInfo
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Bool
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from foundationpose.estimater import *
@@ -157,6 +158,8 @@ class FoundationPoseROS2Node(Node):
         self._lock = threading.Lock()
         self._processing = False
         
+        self.is_on = False
+        
         self.initial_detection_counter = 0
         
         self.rgbd_frames_counter_received = 0
@@ -222,6 +225,13 @@ class FoundationPoseROS2Node(Node):
             1,
         )
 
+        self._toggle_fp_sub = self.create_subscription(
+            Bool,
+            "/orchestator/toggle_fp",
+            self._toggle_fp_cb,
+            1,
+        )
+
         sub_color = Subscriber(
             self,
             CompressedImage,
@@ -249,6 +259,15 @@ class FoundationPoseROS2Node(Node):
         
         self.get_logger().info("FoundationPose ROS2 node initialized")
 
+    def _toggle_fp_cb(self, msg: Bool):
+        self.is_on = msg.data
+        self.get_logger().info(f"FoundationPose toggled: is_on = {self.is_on}")
+        
+        if msg.data == False:
+            if self.current_phase == "PoseTracking":
+                self.get_logger().info("Stopping pose tracking back to detecting for later")
+                self.current_phase = "Detecting"
+
     def _camera_info_cb(self, msg: CameraInfo):
         if self.K is not None:
             return
@@ -269,6 +288,10 @@ class FoundationPoseROS2Node(Node):
         # Skip if camera intrinsics K not received yet
         if self.K is None:
             self.get_logger().warn("Camera intrinsics K not received yet, skipping RGBD message")
+            return
+        
+        if not self.is_on:
+            self.get_logger().info("Node is off, skipping RGBD message")
             return
         
         # Skip if already processing something
