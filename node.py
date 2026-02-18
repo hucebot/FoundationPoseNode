@@ -252,7 +252,7 @@ class FoundationPoseROS2Node(Node):
 
         self._toggle_fp_sub = self.create_subscription(
             Bool,
-            "/orchestator/toggle_fp",
+            "/orchestrator/toggle_fp",
             self._toggle_fp_cb,
             1,
         )
