@@ -55,13 +55,6 @@ DET_NAMES = {
     77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush',
 }
 
-# Camera -> World axis conversion
-R_wc = np.array([
-    [1,  0,  0],
-    [0,  0,  1],
-    [0, -1,  0]
-])
-
 def decode_compressed_color(msg: CompressedImage) -> np.ndarray:
     """Decode CompressedImage to RGB (H, W, 3) uint8."""
     buf = np.frombuffer(msg.data, dtype=np.uint8)
@@ -137,7 +130,7 @@ class FoundationPoseROS2Node(Node):
         self.min_initial_detection_counter = args.min_initial_detection_counter
         self.enable_pose_tracking = args.enable_pose_tracking
         self.seg_model_type = args.seg_model_type
-        self.enable_object_initial_convention_rotation = args.enable_object_initial_convention_rotation
+        self.fix_rotation_convention = args.fix_rotation_convention
         
         assert(self.seg_model_type in ["sam3", "yolo"]), f"Invalid segmentation model type: {self.seg_model_type}"
         if self.seg_model_type == "sam3":
@@ -159,14 +152,14 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Resize factor: {self.resize_factor}")
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
-        self.get_logger().debug(f"Enable object initial convention rotation: {self.enable_object_initial_convention_rotation}")
+        self.get_logger().debug(f"Fix rotation convention: {self.fix_rotation_convention}")
         
         self.K = None # to be set by camera info callback
         self.est = None # to be set by estimator initialization
         self.current_phase = "NotInitialized"
         self.pose_last = None
         self.to_origin = None
-        self.object_initial_convention_rotation = None
+        self.object_initial_yaw_offset = None
         self.bbox = None
         self.frame_count = 0
         self._lock = threading.Lock()
@@ -202,6 +195,9 @@ class FoundationPoseROS2Node(Node):
                 save=False,
             )
             self.seg_model = SAM3SemanticPredictor(overrides=overrides)
+            # run a fake pass to warm up the model
+            self.seg_model.set_image(np.zeros((1080, 1920, 3), dtype=np.uint8))
+            self.seg_model(text=[self.target_object])
         elif self.seg_model_type == "yolo":
             self.seg_model = YOLO(self.seg_model_name)
         else:
@@ -292,9 +288,10 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().info(f"FoundationPose toggled: is_on = {self.is_on}")
         
         if msg.data == False:
-            if self.current_phase == "PoseTracking":
+            if self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
                 self.get_logger().info("Stopping pose tracking back to detecting for later")
-                self.current_phase = "Detecting"
+                self.current_phase = "DetectingAgain"
+                self.object_initial_yaw_offset = None
 
     def _camera_info_cb(self, msg: CameraInfo):
         if self.K is not None:
@@ -378,9 +375,8 @@ class FoundationPoseROS2Node(Node):
         self.rgbd_frames_counter_processed += 1
         
         valid_pose = False
-        if self.current_phase != "PoseTracking":
+        if "Tracking" not in self.current_phase:
             self.current_phase = "Detecting"
-            
             
             if self.seg_model_type == "sam3":
                 color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
@@ -486,14 +482,11 @@ class FoundationPoseROS2Node(Node):
             self.get_logger().info(f"Tracking time: {track_timer_end - track_timer_start:.3f} seconds")
 
         if valid_pose:
-            # Convert pose to object coordinates
-            R_cam = pose[:3, :3]
-            t_cam = pose[:3, 3]
+            center_pose = pose@np.linalg.inv(self.to_origin)
 
-            R_o = R_wc @ R_cam
-            r_o = Rotation.from_matrix(R_o)
-            roll_deg, pitch_deg, yaw_deg = r_o.as_euler('xyz', degrees=True)
-            self.get_logger().info(f"Pose: t = {t_cam}, yaw = {yaw_deg:.2f} deg, pitch = {pitch_deg:.2f} deg, roll = {roll_deg:.2f} deg")
+            # Convert pose to object coordinates
+            R_cam = center_pose[:3, :3]
+            t_cam = center_pose[:3, 3]
 
             pose_msg = PoseStamped()
             pose_msg.header.stamp = color_msg.header.stamp
@@ -503,45 +496,45 @@ class FoundationPoseROS2Node(Node):
             pose_msg.pose.position.z = float(t_cam[2])
             
             r_cam = Rotation.from_matrix(R_cam)
-            q_cam = r_cam.as_quat()
-            euler_cam = r_cam.as_euler('xyz', degrees=True)
-            roll_deg_cam, pitch_deg_cam, yaw_deg_cam = euler_cam
-
-            # TODO and check !
-            if self.object_initial_convention_rotation is None and self.enable_object_initial_convention_rotation:
-                self.object_initial_convention_rotation = np.eye(3)
-            #     if yaw_before_conv > 0 and yaw_before_conv <= 90:
-            #         object_initial_convention_rotation = np.eye(3)
-            #     elif yaw_before_conv > 90 and yaw_before_conv <= 180:
-            #         # rotate -90 degrees around y axis
-            #         object_initial_convention_rotation = yaw_matrix(-np.pi/2)
-            #     elif  yaw_before_conv > -180 and yaw_before_conv <= -90:
-            #         # rotate 180 degrees around y axis
-            #         object_initial_convention_rotation = yaw_matrix(np.pi)
-            #     elif yaw_before_conv > -90 and yaw_before_conv <= 0:
-            #         # rotate 90 degrees around y axis
-            #         object_initial_convention_rotation = yaw_matrix(np.pi/2)
+            euler_cam = r_cam.as_euler('zxy', degrees=True)
+            yaw_cam, pitch_cam, roll_cam = euler_cam
+            self.get_logger().info(f"Pose: t = {t_cam}, yaw = {yaw_cam:.2f} deg, pitch = {pitch_cam:.2f} deg, roll = {roll_cam:.2f} deg")
             
-            if self.object_initial_convention_rotation is not None and self.enable_object_initial_convention_rotation:
-                new_R_cam = R_cam @ self.object_initial_convention_rotation
-                new_r_cam = Rotation.from_matrix(new_R_cam)
-                new_q_cam = new_r_cam.as_quat()
-                new_euler_cam = new_r_cam.as_euler('xyz', degrees=True)
-                new_roll_deg_cam, new_pitch_deg_cam, new_yaw_deg_cam = new_euler_cam
+            if self.fix_rotation_convention:
+                
+                if (self.fix_rotation_convention == "Initial" and self.object_initial_yaw_offset is None) or (self.fix_rotation_convention == "All"):
+                    # Remap yaw to [0, 90] by adding the right offset; leave pitch and roll unchanged
+                    # so only the z-axis angle is constrained (no axis flipping).
+                    # Either every time or only the first time, fix the yaw offset
+                    if yaw_cam > 0 and yaw_cam <= 90:
+                        self.object_initial_yaw_offset = 0
+                        self.get_logger().info("Yaw is between 0 and 90 degrees, no change")
+                    elif yaw_cam > 90 and yaw_cam <= 180:
+                        self.object_initial_yaw_offset = -90
+                        self.get_logger().info("Yaw 90..180 -> remap to 0..90 (offset -90)")
+                    elif yaw_cam > -180 and yaw_cam <= -90:
+                        self.object_initial_yaw_offset = 180
+                        self.get_logger().info("Yaw -180..-90 -> remap to 0..90 (offset +180)")
+                    elif yaw_cam > -90 and yaw_cam <= 0:
+                        self.object_initial_yaw_offset = 90
+                        self.get_logger().info("Yaw -90..0 -> remap to 0..90 (offset +90)")
+                    else:
+                        self.object_initial_yaw_offset = 0  # boundary
+                
+                new_yaw = yaw_cam + self.object_initial_yaw_offset
+                new_r_cam = Rotation.from_euler("zxy", [new_yaw, pitch_cam, roll_cam], degrees=True)
+                
             else:
-                new_q_cam = q_cam
-                new_euler_cam = euler_cam
-                new_roll_deg_cam, new_pitch_deg_cam, new_yaw_deg_cam = new_euler_cam
-
+                new_r_cam = r_cam 
+                
+            new_q_cam = new_r_cam.as_quat()
+            
             pose_msg.pose.orientation.x = float(new_q_cam[0])
             pose_msg.pose.orientation.y = float(new_q_cam[1])
             pose_msg.pose.orientation.z = float(new_q_cam[2])
             pose_msg.pose.orientation.w = float(new_q_cam[3])
             self._pose_pub.publish(pose_msg)
 
-            #   print(object_initial_convention_rotation.shape, R_world.shape)
-            #   R_world = R_world @ object_initial_convention_rotation
-        
         # Finish processing by releasing the lock
         self._lock.acquire()
         self._processing = False
@@ -586,7 +579,7 @@ if __name__ == "__main__":
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
     parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
-    parser.add_argument("--enable_object_initial_convention_rotation", "-eoicr", action="store_true", default=False, help="Enable object initial convention rotation.")
+    parser.add_argument("--fix_rotation_convention", "-f", type=str, default="None", help="Fix rotation convention. Either 'None', 'Initial', 'All'.")
     args = parser.parse_args()
     main(args)
 
