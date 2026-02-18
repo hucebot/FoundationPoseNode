@@ -31,8 +31,11 @@ from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from foundationpose.estimater import *
 from ultralytics import YOLO
+from ultralytics.models.sam import SAM3SemanticPredictor
 
 from scipy.spatial.transform import Rotation
+
+
 
 DET_NAMES = {
     0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus',
@@ -133,6 +136,14 @@ class FoundationPoseROS2Node(Node):
         self.resize_factor = args.resize_factor
         self.min_initial_detection_counter = args.min_initial_detection_counter
         self.enable_pose_tracking = args.enable_pose_tracking
+        self.seg_model_type = args.seg_model_type
+        
+        assert(self.seg_model_type in ["sam3", "yolo"]), f"Invalid segmentation model type: {self.seg_model_type}"
+        if self.seg_model_type == "sam3":
+            self.seg_model_name = "sam3.pt"
+        elif self.seg_model_type == "yolo":
+            assert("yolo" in self.seg_model_name), f"Invalid YOLO model name: {self.seg_model_name}"
+        
         
         self.get_logger().debug("==== PARAMETERS ====")
         self.get_logger().debug(f"Mesh file: {self.mesh_file}")
@@ -176,9 +187,23 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
         
         # Initialize segmentation / detection model
-        self.get_logger().info(f"Initializing segmentation model {self.seg_model_name}...")
-        self.seg_model = YOLO(self.seg_model_name)
-        self.get_logger().info(f"Segmentation model {self.seg_model_name} initialized")
+        self.get_logger().info(f"Initializing segmentation model {self.seg_model_type} ({self.seg_model_name})...")
+        if self.seg_model_type == "sam3":
+            # Initialize predictor with configuration
+            overrides = dict(
+                conf=0.25,
+                task="segment",
+                mode="predict",
+                model=f"sam3/{self.seg_model_name}",
+                half=True,  # Use FP16 for faster inference
+                save=False,
+            )
+            self.seg_model = SAM3SemanticPredictor(overrides=overrides)
+        elif self.seg_model_type == "yolo":
+            self.seg_model = YOLO(self.seg_model_name)
+        else:
+            raise ValueError(f"Invalid segmentation model type: {self.seg_model_type}")
+        self.get_logger().info(f"Segmentation model {self.seg_model_type} ({self.seg_model_name}) initialized")
         
         # Initialize estimator
         self.get_logger().info("Initializing estimator...")
@@ -353,41 +378,76 @@ class FoundationPoseROS2Node(Node):
         if self.current_phase != "PoseTracking":
             self.current_phase = "Detecting"
             
-            # perform detection or initial pose estimation
-            target_mask = None
-            found_object = 0
-            results = self.seg_model.track(color) # per image (if batching)
-            for iter, result in enumerate(results):
-                if len(result.boxes) == 0 or result.boxes.id is None:
-                    self.get_logger().warn(f"No boxes found in frame {self.rgbd_frames_counter_processed}, iter {iter}")
-                    continue
-                class_ids = result.boxes.cls.cpu().numpy()
-                class_names = [DET_NAMES.get(cls_id, f"class_{cls_id}") for cls_id in class_ids]
-                scores = result.boxes.conf.cpu().numpy()
-                track_ids = result.boxes.id.cpu().numpy()
-                masks = result.masks.data.cpu().numpy()
-                print(f"\n ===== [{self.rgbd_frames_counter_processed}] {iter} =====")
-                for cls_name, score, track_id, mask in zip(class_names, scores, track_ids, masks):
-                    print(f"\t{cls_name} ({score:.2f}) {int(track_id)}")
-                    if cls_name == self.target_object:
-                        target_mask = mask
-                        found_object += 1
             
-            if found_object == 1:
-                # need min_initial_detection_counter detections in a row to start tracking
-                self.initial_detection_counter += 1
-                self.get_logger().info(f"Initial detection counter ({self.target_object}): {self.initial_detection_counter} / {self.min_initial_detection_counter}")
-            elif found_object > 1:
-                self.get_logger().warn(f"Multiple objects found ({found_object}) in frame {self.rgbd_frames_counter_processed}, iter {iter} cannot chose")
-                self.initial_detection_counter = 0
-            else:
-                # set or reset to 0 if not found
-                self.initial_detection_counter = 0
+            if self.seg_model_type == "sam3":
+                color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+                self.seg_model.set_image(color)
+                results = self.seg_model(text=[self.target_object])
+                if results is None:
+                    self.get_logger().warn(f"No results from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
+                    self._lock.acquire()
+                    self._processing = False
+                    self._lock.release()
+                    return
+                target_masks = results[0].masks #.data.cpu().numpy()
+                if target_masks is None:
+                    self.get_logger().warn(f"No target masks from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
+                    self._lock.acquire()
+                    self._processing = False
+                    self._lock.release()
+                    return
+                
+                found_obects = len(target_masks)
+                if found_obects == 1:
+                    self.initial_detection_counter = self.min_initial_detection_counter # directly set to min_initial_detection_counter to start tracking
+                    target_mask = target_masks[0].data.cpu().numpy()
+                    target_mask = target_mask[0,...].astype(np.uint8)
+                    # print(type(target_mask))
+                    # print(f"target_mask.shape: {target_mask.shape}, dtype: {target_mask.dtype}, min: {target_mask.min()}, max: {target_mask.max()}")
+                    self.get_logger().info(f"Initial detection counter ({self.target_object}): {self.initial_detection_counter} / {self.min_initial_detection_counter}")
+                elif found_obects > 1:
+                    self.get_logger().warn(f"Multiple objects found ({found_obects}) in frame {self.rgbd_frames_counter_processed}, cannot chose")
+                    self.initial_detection_counter = 0
+                else:
+                    self.initial_detection_counter = 0
+
+            elif self.seg_model_type == "yolo":
+                # perform detection or initial pose estimation
+                target_mask = None
+                found_object = 0
+                results = self.seg_model.track(color) # per image (if batching)
+                for iter, result in enumerate(results):
+                    if len(result.boxes) == 0 or result.boxes.id is None:
+                        self.get_logger().warn(f"No boxes found in frame {self.rgbd_frames_counter_processed}, iter {iter}")
+                        continue
+                    class_ids = result.boxes.cls.cpu().numpy()
+                    class_names = [DET_NAMES.get(cls_id, f"class_{cls_id}") for cls_id in class_ids]
+                    scores = result.boxes.conf.cpu().numpy()
+                    track_ids = result.boxes.id.cpu().numpy()
+                    masks = result.masks.data.cpu().numpy()
+                    print(f"\n ===== [{self.rgbd_frames_counter_processed}] {iter} =====")
+                    for cls_name, score, track_id, mask in zip(class_names, scores, track_ids, masks):
+                        print(f"\t{cls_name} ({score:.2f}) {int(track_id)}")
+                        if cls_name == self.target_object:
+                            target_mask = mask
+                            found_object += 1
+                
+                if found_object == 1:
+                    # need min_initial_detection_counter detections in a row to start tracking
+                    self.initial_detection_counter += 1
+                    self.get_logger().info(f"Initial detection counter ({self.target_object}): {self.initial_detection_counter} / {self.min_initial_detection_counter}")
+                elif found_object > 1:
+                    self.get_logger().warn(f"Multiple objects found ({found_object}) in frame {self.rgbd_frames_counter_processed}, iter {iter} cannot chose")
+                    self.initial_detection_counter = 0
+                else:
+                    # set or reset to 0 if not found
+                    self.initial_detection_counter = 0
                 
             if self.initial_detection_counter >= self.min_initial_detection_counter:
                 self.initial_detection_counter = 0
                 self.current_phase = "PoseEstimation"
                 est_timer_start = time.time()
+                # print(f"target_mask.shape: {target_mask.shape}, dtype: {target_mask.dtype}, min: {target_mask.min()}, max: {target_mask.max()}")
                 target_mask = cv2.resize(target_mask, (color.shape[1], color.shape[0]), interpolation=cv2.INTER_NEAREST)
                 target_mask = (target_mask > 0).astype(bool)
                 pose = self.est.register(
@@ -406,7 +466,7 @@ class FoundationPoseROS2Node(Node):
                 self.get_logger().info(f"Pose estimation time: {est_timer_end - est_timer_start:.3f} seconds")
                 self.get_logger().info(f"Starting tracking after {self.initial_detection_counter} initial detections with {self.target_object}")
                 
-                
+            
         elif self.current_phase == "PoseTracking":
             # perform tracking
             print("============ PoseTracking =============")
@@ -486,6 +546,7 @@ if __name__ == "__main__":
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
+    parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
     args = parser.parse_args()
     main(args)
 
