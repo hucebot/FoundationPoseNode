@@ -500,7 +500,7 @@ class FoundationPoseROS2Node(Node):
             yaw_cam, pitch_cam, roll_cam = euler_cam
             self.get_logger().info(f"Pose: t = {t_cam}, yaw = {yaw_cam:.2f} deg, pitch = {pitch_cam:.2f} deg, roll = {roll_cam:.2f} deg")
             
-            if self.fix_rotation_convention:
+            if self.fix_rotation_convention != "None":
                 
                 if (self.fix_rotation_convention == "Initial" and self.object_initial_yaw_offset is None) or (self.fix_rotation_convention == "All"):
                     # Remap yaw to [0, 90] by adding the right offset; leave pitch and roll unchanged
