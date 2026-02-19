@@ -543,9 +543,13 @@ class FoundationPoseROS2Node(Node):
                     else:
                         self.object_initial_yaw_offset = 0  # boundary
                 
-                new_yaw = yaw_cam + self.object_initial_yaw_offset
-                new_r_cam = Rotation.from_euler("zxy", [new_yaw, pitch_cam, roll_cam], degrees=True)
+                if self.fix_rotation_convention == "Force0":
+                    new_yaw = 0
+                else:
+                    new_yaw = yaw_cam + self.object_initial_yaw_offset
                 
+                new_r_cam = Rotation.from_euler("zxy", [new_yaw, pitch_cam, roll_cam], degrees=True)
+                    
             else:
                 new_r_cam = r_cam 
                 
@@ -601,7 +605,7 @@ if __name__ == "__main__":
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
     parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
-    parser.add_argument("--fix_rotation_convention", "-frc", type=str, default="None", help="Fix rotation convention. Either 'None', 'Initial', 'All'.")
+    parser.add_argument("--fix_rotation_convention", "-frc", type=str, default="None", help="Fix rotation convention. Either 'None', 'Initial', 'All', 'Force0.")
     parser.add_argument("--symmetry_yaw_angles", "-sya", type=str, default=None, help="Symmetry yaw angles. Format: 'yaw1,yaw2,yaw3,...'. Empty = no symmetry transforms.")
     args = parser.parse_args()
     main(args)
