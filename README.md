@@ -76,7 +76,14 @@ python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,
 - `camera_info_topic`
 - `pose_frame_id`
 - `slop`
-- `seg_model_name`
-- `resize_factor`
-- `min_initial_detection_counter`
-- `enable_pose_tracking`
+- `seg_model_type` : either `yolo` (will use a YOLO-Seg model with COCO-classes, then the `target_object` must be one of those classes, e.g. `bottle`) or `sam3` (open vocabulary)
+- `seg_model_name` : will always default to `sam3.pt` if seg_model_type is sam3 otherwise use to specify the YOLO-Seg model size e.g. `yolo26n-seg.pt`
+- `resize_factor` : divide the image size by this factor to reduce memory usage
+- `min_initial_detection_counter` : requires minimum consecutive detections (with one and only one valid object in the frame) at the begining before starting the pose estimation (only usable when `seg_model_type` is `yolo`)
+- `enable_pose_tracking` : do pose tracking, otherwise keep re-doing the initial pose estimation for each frame
+- `fix_rotation_convention` : change the object yaw rotation (around its `z` axis) with 4 options :
+  - `None` : Keep the model output
+  - `Initial` : when the node is turned on will set an offset to have the yaw in 0-90 deg and keep applying this offset
+  - `All` : at every iteration, will offset the yaw to be in 0-90 deg
+  - `Force0` : at every iteration will put the yaw to 0 (e.g. for round objects)
+- `symmetry_yaw_angles`: intialize symmetry transforms on the `z` axis for Foundation Pose (reduces the number of initial hypothesis), example : `0,90,180,270` for a "square" based object
