@@ -63,6 +63,17 @@ python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,
 python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,60,90,120,150,180,210,240,270,300,330 -frc Force0 --seg_model_type sam3 --target_object white\ bottle
 ```
 
+To switch objects : 
+```
+ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'mesh_update_mustard\' --once
+```
+
+To switch the target object (but keep the same mesh)
+```
+ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'yellow\ bottle\' --once
+```
+
+
 ## Parameters
 
 - `mesh_file`
