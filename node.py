@@ -160,7 +160,7 @@ class FoundationPoseROS2Node(Node):
             assert("yolo" in self.seg_model_name), f"Invalid YOLO model name: {self.seg_model_name}"
 
         coco_names = list(DET_NAMES.values())
-        if self.yolo_model_type == "yolo":
+        if self.seg_model_type == "yolo":
             assert(self.target_object in coco_names), f"Invalid target object: {self.target_object} (must be one of {coco_names})"
         
         # Print parameters
