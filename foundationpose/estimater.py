@@ -119,10 +119,10 @@ class FoundationPose:
 
     rot_grid = np.asarray(rot_grid)
     logging.info(f"rot_grid:{rot_grid.shape}")
-    if mycpp is not None:
-      rot_grid = mycpp.cluster_poses(30, 99999, rot_grid, self.symmetry_tfs.data.cpu().numpy())
-    else:
-      rot_grid = cluster_poses(30, 99999, rot_grid, self.symmetry_tfs.data.cpu().numpy())
+    # if mycpp is not None:
+    #   rot_grid = mycpp.cluster_poses(30, 99999, rot_grid, self.symmetry_tfs.data.cpu().numpy())
+    # else:
+    rot_grid = cluster_poses(30, 99999, rot_grid, self.symmetry_tfs.data.cpu().numpy())
     rot_grid = np.asarray(rot_grid)
     logging.info(f"after cluster, rot_grid:{rot_grid.shape}")
     self.rot_grid = torch.as_tensor(rot_grid, device='cuda', dtype=torch.float)
