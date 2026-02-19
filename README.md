@@ -60,6 +60,7 @@ docker build --network host -f docker/dockerfile -t foundationposev2 .
 bash ./docker/run_container.sh 
 python node.py
 python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,60,90,120,150,180,210,240,270,300,330
+python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,60,90,120,150,180,210,240,270,300,330 -frc Force0 --seg_model_type sam3 --target_object white\ bottle
 ```
 
 ## Parameters

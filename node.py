@@ -10,6 +10,8 @@ Subscriptions:
   - /camera/color/image_raw/compressed (sensor_msgs/CompressedImage)
   - /camera/depth/image_raw/compressed (sensor_msgs/CompressedImage)
   - /camera/color/camera_info (sensor_msgs/CameraInfo) for intrinsics K
+  - /orchestrator/pose/toggle_fp (std_msgs/Bool) to enable/disable the node
+  - /orchestrator/pose/target_object (std_msgs/String) to set the target object class at runtime
 
 Publishes:
   - object_pose (geometry_msgs/PoseStamped)
@@ -26,7 +28,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import CompressedImage, CameraInfo
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from foundationpose.estimater import *
@@ -87,11 +89,18 @@ def symmetry_tfs_from_yaw_angles(yaw_angles):
     symmetry_tfs = [] # list of 4x4 numpy arrays
     for yaw_angle in yaw_angles:
         symmetry_yaw_rotation = Rotation.from_euler("zxy", [yaw_angle, 0, 0], degrees=True)
-        symmetry_yaw_rotation_matrix = symmetry_yaw_rotation.as_matrix() # 3x3 rotation matrix
+        symmetry_yaw_rotation_matrix = symmetry_yaw_rotation.as_matrix() # 3x3 rotation matrix
         symmetry_tf_matrix = np.eye(4)
         symmetry_tf_matrix[:3, :3] = symmetry_yaw_rotation_matrix
         symmetry_tfs.append(symmetry_tf_matrix)
     return np.array(symmetry_tfs)
+
+
+OBJECT_KEYS_TO_PARAMETERS = {
+    "mustard": {"mesh_file": "./assets/mustard/textured_simple.obj", "symmetry_yaw_angles": None, "target_object": "mustard", "fix_rotation_convention": "None"},
+    "juice": {"mesh_file": "./assets/bottle/ref_mesh.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "bottle", "fix_rotation_convention": "All"},
+    "milk": {"mesh_file": "./assets/milk/ref_mesh.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "white bottle", "fix_rotation_convention": "Force0"},
+}
 
 class FoundationPoseROS2Node(Node):
     def __init__(self, args):
@@ -143,13 +152,18 @@ class FoundationPoseROS2Node(Node):
         self.fix_rotation_convention = args.fix_rotation_convention
         self.symmetry_yaw_angles = args.symmetry_yaw_angles
         
+        # Make some checks on the parameters
         assert(self.seg_model_type in ["sam3", "yolo"]), f"Invalid segmentation model type: {self.seg_model_type}"
         if self.seg_model_type == "sam3":
             self.seg_model_name = "sam3.pt"
         elif self.seg_model_type == "yolo":
             assert("yolo" in self.seg_model_name), f"Invalid YOLO model name: {self.seg_model_name}"
+
+        coco_names = list(DET_NAMES.values())
+        if self.yolo_model_type == "yolo":
+            assert(self.target_object in coco_names), f"Invalid target object: {self.target_object} (must be one of {coco_names})"
         
-        
+        # Print parameters
         self.get_logger().debug("==== PARAMETERS ====")
         self.get_logger().debug(f"Mesh file: {self.mesh_file}")
         self.get_logger().debug(f"Target object: {self.target_object}")
@@ -278,6 +292,13 @@ class FoundationPoseROS2Node(Node):
             1,
         )
 
+        self._target_object_sub = self.create_subscription(
+            String,
+            "/orchestrator/pose/target_object",
+            self._target_object_cb,
+            1,
+        )
+
         sub_color = Subscriber(
             self,
             CompressedImage,
@@ -314,6 +335,100 @@ class FoundationPoseROS2Node(Node):
                 self.get_logger().info("Stopping pose tracking back to detecting for later")
                 self.current_phase = "DetectingAgain"
                 self.object_initial_yaw_offset = None
+
+    def _target_object_cb(self, msg: String):
+        new_target = msg.data.strip()
+        if not new_target:
+            self.get_logger().error("Received empty target object, ignoring")
+            return
+        
+        if new_target.startswith("mesh_update_"):
+            # it will be a full update with new mesh
+            self.get_logger().info(f"Received mesh update request: {new_target}. Will restart the estimator with new mesh")
+            self._lock.acquire()
+            key_name = new_target.replace("mesh_update_", "") # name of target e.g.
+            
+            if key_name not in OBJECT_KEYS_TO_PARAMETERS:
+                self.get_logger().error(f"Invalid key name: {key_name}. Valid: {list(OBJECT_KEYS_TO_PARAMETERS.keys())}")
+                self._lock.release()
+                return
+            
+            self.mesh_file = OBJECT_KEYS_TO_PARAMETERS[key_name]["mesh_file"]
+            if not os.path.exists(self.mesh_file):
+                self.get_logger().error(f"Mesh file {self.mesh_file} does not exist")
+                self._lock.release()
+                return
+            
+            self.symmetry_yaw_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_yaw_angles"]
+            self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
+            self.fix_rotation_convention = OBJECT_KEYS_TO_PARAMETERS[key_name]["fix_rotation_convention"]
+            
+            del self.est.scorer # delete the old score predictor
+            del self.est.refiner # delete the old score and refine predictors
+            del self.est.glctx # delete the old glctx
+            del self.est # delete the old estimator
+            self.get_logger().info(f"Deleted old estimator")
+            # clear cuda memory ?
+            torch.cuda.empty_cache()
+
+            # Load mesh and compute bounds
+            mesh = trimesh.load(self.mesh_file)
+            self.to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
+            self.bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
+            self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
+            
+            # Load symmetry transforms
+            if self.symmetry_yaw_angles is not None:
+                symmetry_yaw_angles = [float(yaw_angle) for yaw_angle in self.symmetry_yaw_angles.split(",")]
+                symmetry_tfs = symmetry_tfs_from_yaw_angles(symmetry_yaw_angles)
+                self.get_logger().debug(f"Symmetry transforms: {symmetry_tfs.shape}")
+            else:
+                symmetry_tfs = None
+                self.get_logger().debug(f"No symmetry transforms")
+
+            # Initialize estimator
+            self.get_logger().info("Initializing estimator...")
+            scorer = ScorePredictor()
+            refiner = PoseRefinePredictor()
+            glctx = dr.RasterizeCudaContext()
+            self.est = FoundationPose(
+                model_pts=mesh.vertices,
+                model_normals=mesh.vertex_normals,
+                mesh=mesh,
+                scorer=scorer,
+                refiner=refiner,
+                debug_dir=self.debug_dir,
+                debug=self.debug,
+                glctx=glctx,
+                symmetry_tfs=symmetry_tfs,
+            )
+            self.get_logger().info("FoundationPose estimator re-initialized")
+            
+            # Reset tracking so we detect the new object from scratch
+            if self.current_phase in ("PoseTracking", "StartPoseTracking", "DetectingAgain"):
+                self.current_phase = "DetectingAgain"
+            self.initial_detection_counter = 0
+            self.object_initial_yaw_offset = None            
+            
+            self.current_phase = "DetectingAgain"
+            self._lock.release()
+            return
+        
+        else:
+            # just a change of target object        
+            if self.seg_model_type == "yolo":
+                if new_target not in list(DET_NAMES.values()):
+                    self.get_logger().error(f"Ignoring target_object '{new_target}' (not a valid COCO class). Valid: {list(DET_NAMES.values())}")
+                    return
+                
+            self.target_object = new_target
+            self.get_logger().info(f"Target object changed to: {self.target_object}")
+            
+            # Reset tracking so we detect the new object from scratch
+            if self.current_phase in ("PoseTracking", "StartPoseTracking", "DetectingAgain"):
+                self.current_phase = "DetectingAgain"
+            self.initial_detection_counter = 0
+            self.object_initial_yaw_offset = None
 
     def _camera_info_cb(self, msg: CameraInfo):
         if self.K is not None:
