@@ -83,6 +83,16 @@ def decode_compressed_depth(msg: CompressedImage, scale: float = 0.001) -> np.nd
     return depth_img * scale
 
 
+def symmetry_tfs_from_yaw_angles(yaw_angles):
+    symmetry_tfs = [] # list of 4x4 numpy arrays
+    for yaw_angle in yaw_angles:
+        symmetry_yaw_rotation = Rotation.from_euler("zxy", [yaw_angle, 0, 0], degrees=True)
+        symmetry_yaw_rotation_matrix = symmetry_yaw_rotation.as_matrix() # 3x3 rotation matrix
+        symmetry_tf_matrix = np.eye(4)
+        symmetry_tf_matrix[:3, :3] = symmetry_yaw_rotation_matrix
+        symmetry_tfs.append(symmetry_tf_matrix)
+    return np.array(symmetry_tfs)
+
 class FoundationPoseROS2Node(Node):
     def __init__(self, args):
         super().__init__("foundation_pose_node")
@@ -131,6 +141,7 @@ class FoundationPoseROS2Node(Node):
         self.enable_pose_tracking = args.enable_pose_tracking
         self.seg_model_type = args.seg_model_type
         self.fix_rotation_convention = args.fix_rotation_convention
+        self.symmetry_yaw_angles = args.symmetry_yaw_angles
         
         assert(self.seg_model_type in ["sam3", "yolo"]), f"Invalid segmentation model type: {self.seg_model_type}"
         if self.seg_model_type == "sam3":
@@ -153,6 +164,7 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
         self.get_logger().debug(f"Fix rotation convention: {self.fix_rotation_convention}")
+        self.get_logger().debug(f"Symmetry yaw angles: {self.symmetry_yaw_angles}")
         
         self.K = None # to be set by camera info callback
         self.est = None # to be set by estimator initialization
@@ -204,6 +216,15 @@ class FoundationPoseROS2Node(Node):
             raise ValueError(f"Invalid segmentation model type: {self.seg_model_type}")
         self.get_logger().info(f"Segmentation model {self.seg_model_type} ({self.seg_model_name}) initialized")
         
+        # Load symmetry transforms
+        if self.symmetry_yaw_angles is not None:
+            symmetry_yaw_angles = [float(yaw_angle) for yaw_angle in self.symmetry_yaw_angles.split(",")]
+            symmetry_tfs = symmetry_tfs_from_yaw_angles(symmetry_yaw_angles)
+            self.get_logger().debug(f"Symmetry transforms: {symmetry_tfs.shape}")
+        else:
+            symmetry_tfs = None
+            self.get_logger().debug(f"No symmetry transforms")
+        
         # Initialize estimator
         self.get_logger().info("Initializing estimator...")
         scorer = ScorePredictor()
@@ -218,6 +239,7 @@ class FoundationPoseROS2Node(Node):
             debug_dir=self.debug_dir,
             debug=self.debug,
             glctx=glctx,
+            symmetry_tfs=symmetry_tfs,
         )
         self.get_logger().info("FoundationPose estimator initialized")
         
@@ -579,7 +601,8 @@ if __name__ == "__main__":
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
     parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
-    parser.add_argument("--fix_rotation_convention", "-f", type=str, default="None", help="Fix rotation convention. Either 'None', 'Initial', 'All'.")
+    parser.add_argument("--fix_rotation_convention", "-frc", type=str, default="None", help="Fix rotation convention. Either 'None', 'Initial', 'All'.")
+    parser.add_argument("--symmetry_yaw_angles", "-sya", type=str, default=None, help="Symmetry yaw angles. Format: 'yaw1,yaw2,yaw3,...'. Empty = no symmetry transforms.")
     args = parser.parse_args()
     main(args)
 
