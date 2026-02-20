@@ -97,7 +97,7 @@ def symmetry_tfs_from_yaw_angles(yaw_angles):
 
 
 OBJECT_KEYS_TO_PARAMETERS = {
-    "mustard": {"mesh_file": "./assets/mustard/textured_simple.obj", "symmetry_yaw_angles": "0,180", "target_object": "yellow bottle", "fix_rotation_convention": "All"},
+    "mustard": {"mesh_file": "./assets/mustard/textured_simple.obj", "symmetry_yaw_angles": "0,180", "target_object": "yellow bottle", "fix_rotation_convention": "None"},
     "juice": {"mesh_file": "./assets/bottle/ref_mesh.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "bottle", "fix_rotation_convention": "All"},
     "milk": {"mesh_file": "./assets/milk/ref_mesh.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "white bottle", "fix_rotation_convention": "Force0"},
 }
