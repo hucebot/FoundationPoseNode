@@ -63,6 +63,13 @@ python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,
 python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,60,90,120,150,180,210,240,270,300,330 -frc Force0 --seg_model_type sam3 --target_object white\ bottle
 ```
 
+Quick DDS/topic test (prints from callback only):
+```
+python dummy_node_sub.py --mode rgb
+python dummy_node_sub.py --mode depth
+python dummy_node_sub.py --mode sync --slop 0.05
+```
+
 Toggle the node
 ```
 ros2 topic pub /orchestrator/pose/toggle_fp std_msgs/msg/Bool data:\ true --once
