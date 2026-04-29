@@ -465,6 +465,7 @@ class FoundationPoseROS2Node(Node):
             self._processing = True
             self._lock.release()
         else:
+            self.get_logger().warn("Could not acquire lock, skipping RGBD message")
             return
         
         # Update current phase
@@ -711,9 +712,9 @@ if __name__ == "__main__":
     parser.add_argument("--debug_dir", type=str, default="", help="Debug directory.")
     parser.add_argument("--depth_scale", type=float, default=0.001, help="Depth scale.")
     parser.add_argument("--color_topic", type=str, default="/realsense_head_front/color/image_raw/compressed", help="Color topic.")
-    parser.add_argument("--depth_topic", type=str, default="/realsense_head_front/depth/image_raw/compressedDepth", help="Depth topic.")
+    parser.add_argument("--depth_topic", type=str, default="/realsense_head_front/depth/image_rect_raw/compressedDepth", help="Depth topic.")
     parser.add_argument("--camera_info_topic", type=str, default="/realsense_head_front/color/camera_info", help="Camera info topic.")
-    parser.add_argument("--pose_frame_id", type=str, default="head_front_camera_link", help="Pose frame id.")
+    parser.add_argument("--pose_frame_id", type=str, default="camera_depth_optical_frame", help="Pose frame id.")
     parser.add_argument("--slop", type=float, default=1.0, help="Slop.")
     parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
     parser.add_argument("--seg_model_name", type=str, default="yolo26n-seg.pt", help="Segmentation model name.")
