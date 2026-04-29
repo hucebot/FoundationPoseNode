@@ -5,3 +5,4 @@ debug_node/
 assets/
 build/
 *.pth
+NOTES.md

@@ -21,7 +21,7 @@ docker run \
     -v /tmp:/tmp \
     -e DISPLAY=${DISPLAY} \
     -e GIT_INDEX_FILE \
-    -e ROS_DOMAIN_ID=1\
+    -e ROS_DOMAIN_ID=2\
     -v $(pwd)/configs/:/xml_configs \
     -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp\
     -e CYCLONEDDS_URI=/xml_configs/cyclonedds.xml\
