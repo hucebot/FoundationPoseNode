@@ -6,3 +6,4 @@ debug_node/
 build/
 *.pth
 NOTES.md
+assets_old/

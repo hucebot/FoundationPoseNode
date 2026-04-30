@@ -130,7 +130,8 @@ class FoundationPoseROS2Node(Node):
         # Get parameters
         self.mesh_file = self.get_parameter("mesh_file").value
         assert(os.path.exists(self.mesh_file)), f"Mesh file {self.mesh_file} does not exist"
-        self._marker_mesh_resource = f"file://{os.path.abspath(self.mesh_file)}"
+        mesh_file_basename = os.path.basename(self.mesh_file)
+        self._marker_mesh_resource = f"file:///{mesh_file_basename}"
 
         # Get debug directory and create if it doesn't exist
         self.debug_dir = self.get_parameter("debug_dir").value
@@ -208,7 +209,7 @@ class FoundationPoseROS2Node(Node):
         set_seed(0)
 
         # Load mesh and compute bounds
-        mesh = trimesh.load(self.mesh_file)
+        mesh = trimesh.load(self.mesh_file, force="mesh")
         self.to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
         self.bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
         self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
@@ -389,7 +390,7 @@ class FoundationPoseROS2Node(Node):
             torch.cuda.empty_cache()
 
             # Load mesh and compute bounds
-            mesh = trimesh.load(self.mesh_file)
+            mesh = trimesh.load(self.mesh_file, force="mesh")
             self.to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
             self.bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
             self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
