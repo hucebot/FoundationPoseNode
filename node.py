@@ -15,6 +15,7 @@ Subscriptions:
 
 Publishes:
   - object_pose (geometry_msgs/PoseStamped)
+  - object_marker (visualization_msgs/Marker) mesh marker at pose
 """
 
 import os
@@ -25,10 +26,11 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import CompressedImage, CameraInfo
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool, String
+from visualization_msgs.msg import Marker
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from foundationpose.estimater import *
@@ -97,9 +99,9 @@ def symmetry_tfs_from_yaw_angles(yaw_angles):
 
 
 OBJECT_KEYS_TO_PARAMETERS = {
-    "mustard": {"mesh_file": "./assets/mustard/textured_simple.obj", "symmetry_yaw_angles": "0,180", "target_object": "yellow bottle", "fix_rotation_convention": "None"},
-    "juice": {"mesh_file": "./assets/bottle/ref_mesh.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "bottle", "fix_rotation_convention": "All"},
-    "milk": {"mesh_file": "./assets/milk/ref_mesh.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "white bottle", "fix_rotation_convention": "Force0"},
+    "mustard": {"mesh_file": "./assets/mustard/mustard.obj", "symmetry_yaw_angles": "0,180", "target_object": "yellow bottle", "fix_rotation_convention": "None"},
+    "juice": {"mesh_file": "./assets/juice/juice.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "bottle", "fix_rotation_convention": "All"},
+    "milk": {"mesh_file": "./assets/milk/milk.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "white bottle", "fix_rotation_convention": "Force0"},
 }
 
 class FoundationPoseROS2Node(Node):
@@ -119,6 +121,8 @@ class FoundationPoseROS2Node(Node):
         self.declare_parameter("camera_info_topic", args.camera_info_topic)
         self.declare_parameter("pose_frame_id", args.pose_frame_id)
         self.declare_parameter("slop", args.slop)
+        self.declare_parameter("marker_mesh_scale", 1.0)
+        self.declare_parameter("marker_mesh_use_embedded_materials", True)
 
         # Set current code directory
         code_dir = os.path.dirname(os.path.realpath(__file__))
@@ -126,6 +130,7 @@ class FoundationPoseROS2Node(Node):
         # Get parameters
         self.mesh_file = self.get_parameter("mesh_file").value
         assert(os.path.exists(self.mesh_file)), f"Mesh file {self.mesh_file} does not exist"
+        self._marker_mesh_resource = f"file://{os.path.abspath(self.mesh_file)}"
 
         # Get debug directory and create if it doesn't exist
         self.debug_dir = self.get_parameter("debug_dir").value
@@ -271,6 +276,12 @@ class FoundationPoseROS2Node(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
+        qos_marker = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
 
         self._camera_info_sub = self.create_subscription(
             CameraInfo,
@@ -283,6 +294,11 @@ class FoundationPoseROS2Node(Node):
             PoseStamped,
             "object_pose",
             1,
+        )
+        self._marker_pub = self.create_publisher(
+            Marker,
+            "object_marker",
+            qos_marker,
         )
 
         self._toggle_fp_sub = self.create_subscription(
@@ -358,6 +374,7 @@ class FoundationPoseROS2Node(Node):
                 self.get_logger().error(f"Mesh file {self.mesh_file} does not exist")
                 self._lock.release()
                 return
+            self._marker_mesh_resource = f"file://{os.path.abspath(self.mesh_file)}"
             
             self.symmetry_yaw_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_yaw_angles"]
             self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
@@ -429,6 +446,28 @@ class FoundationPoseROS2Node(Node):
                 self.current_phase = "DetectingAgain"
             self.initial_detection_counter = 0
             self.object_initial_yaw_offset = None
+
+    def _publish_marker(self, pose_msg: PoseStamped):
+        marker = Marker()
+        marker.header = pose_msg.header
+        marker.ns = "foundationpose"
+        marker.id = 0
+        marker.type = Marker.MESH_RESOURCE
+        marker.action = Marker.ADD
+        marker.pose = pose_msg.pose
+        scale = float(self.get_parameter("marker_mesh_scale").value)
+        marker.scale.x = scale
+        marker.scale.y = scale
+        marker.scale.z = scale
+        marker.color.r = 1.0
+        marker.color.g = 1.0
+        marker.color.b = 1.0
+        marker.color.a = 1.0
+        marker.mesh_resource = self._marker_mesh_resource
+        marker.mesh_use_embedded_materials = bool(
+            self.get_parameter("marker_mesh_use_embedded_materials").value
+        )
+        self._marker_pub.publish(marker)
 
     def _camera_info_cb(self, msg: CameraInfo):
         if self.K is not None:
@@ -676,6 +715,7 @@ class FoundationPoseROS2Node(Node):
             pose_msg.pose.orientation.z = float(new_q_cam[2])
             pose_msg.pose.orientation.w = float(new_q_cam[3])
             self._pose_pub.publish(pose_msg)
+            self._publish_marker(pose_msg)
 
         # Finish processing by releasing the lock
         self._lock.acquire()
@@ -704,7 +744,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mesh_file", type=str, default="./assets/bottle/ref_mesh.obj", help="Path to object mesh file (e.g. ref_mesh.obj). Empty = use demo_data/bottle.")
+    parser.add_argument("--mesh_file", type=str, default="./assets/juice/juice.obj", help="Path to object mesh file (e.g. juice.obj). Empty = use demo_data/bottle.")
     parser.add_argument("--target_object", type=str, default="bottle", help="Target object class name for YOLO (e.g. bottle, cup).")
     parser.add_argument("--est_refine_iter", type=int, default=5, help="Number of refinement iterations for registration.")
     parser.add_argument("--track_refine_iter", type=int, default=2, help="Number of refinement iterations for tracking.")
