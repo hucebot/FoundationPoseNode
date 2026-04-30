@@ -13,6 +13,10 @@ if [ $IsRunning -eq "0" ]; then
         --ipc host \
         --pid host \
         --name foundationposev2 \
+        --privileged \
+        -v /dev:/dev \
+        -v /run/udev:/run/udev:ro \
+        --device /dev/bus/usb \
         --cap-add=SYS_PTRACE \
         --security-opt seccomp=unconfined \
         -v $DIR:$DIR \

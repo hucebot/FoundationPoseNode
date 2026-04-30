@@ -1,0 +1,25 @@
+/realsense_head_front/camera:
+  ros__parameters:
+    enable_color: true
+    enable_depth: true
+
+    pointcloud.enable: true
+    align_depth.enable: true
+
+    enable_infra1: false
+    enable_infra2: false
+    enable_gyro: false
+    enable_accel: false
+
+    depth_module.profile: "640x480x15"
+    rgb_camera.profile: "640x480x15"
+
+    depth_module.emitter_enabled: 1
+    depth_module.visual_preset: 5 #Could be the "Default" in https://github.com/realsenseai/librealsense/wiki/D400-Series-Visual-Presets
+
+    publish_tf: true
+    unite_imu_method: 0
+
+    rgb_camera.enable_auto_exposure: true
+    pointcloud.ordered_pc: true
+    pointcloud.stream_filter: 1
