@@ -100,8 +100,8 @@ class DummyNodeSub(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["rgb", "depth", "sync"], default="sync")
-    parser.add_argument("--rgb_topic", type=str, default="/realsense_head_front/color/image_raw/compressed")
-    parser.add_argument("--depth_topic", type=str, default="/realsense_head_front/depth/image_rect_raw/compressedDepth")
+    parser.add_argument("--rgb_topic", type=str, default="/realsense_head_front/camera/color/image_raw/compressed")
+    parser.add_argument("--depth_topic", type=str, default="/realsense_head_front/camera/aligned_depth_to_color/image_raw/compressedDepth")
     parser.add_argument("--slop", type=float, default=1.0)
     parser.add_argument("--queue_size", type=int, default=100)
     args = parser.parse_args()
