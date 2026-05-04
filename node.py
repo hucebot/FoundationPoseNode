@@ -21,6 +21,7 @@ Publishes:
 import os
 import time
 import threading
+from typing import Optional, Sequence
 
 import cv2
 import numpy as np
@@ -96,34 +97,78 @@ def symmetry_tfs_from_yaw_angles(yaw_angles):
         symmetry_tfs.append(tf)
     return np.array(symmetry_tfs)
 
-def force_zero_yaw(r_matrix):
+def _orthonormal_basis_from_z(z_axis: np.ndarray) -> np.ndarray:
     """
-    Forces the local Z-rotation to 0 while preserving the 
-    direction of the Z-axis (tilt/pitch/roll).
+    Right-handed rotation matrix [x, y, z] with given z column (object z in camera frame).
+
+    Convention (camera frame): z-forward (depth), x-right, y-down (typical optical frame).
+    - z column is the estimated object z-axis in camera coords.
+    - x column is camera-forward (camera z) projected onto the plane orthogonal to object z.
+    - y column completes the basis: y = z × x.
     """
-    # 1. Extract rotation matrix
-    # R = pose_matrix[:3, :3]
-    R = r_matrix
-    
-    # 2. Get the current Z-axis vector (the 'spine' of your object)
-    # In a rotation matrix, the 3rd column is the local Z-axis in camera space
-    z_axis = R[:, 2] 
-    
-    # 3. Create a new 'X' axis that is perpendicular to the world 'Up' 
-    # and the object's spine. This removes the 'spin' (yaw).
-    # Assuming Camera Y is 'down', let's use a reference vector.
-    ref = np.array([0, 1, 0]) 
-    x_axis = np.cross(ref, z_axis)
-    x_axis /= (np.linalg.norm(x_axis) + 1e-6)
-    
-    # 4. Reconstruct Y to ensure orthogonality
-    y_axis = np.cross(z_axis, x_axis)
-    y_axis /= (np.linalg.norm(y_axis) + 1e-6)
-    
-    # 5. Build the new rotation matrix
-    new_R = np.stack([x_axis, y_axis, z_axis], axis=1)
-    
-    return new_R
+    z = np.asarray(z_axis, dtype=np.float64).reshape(3)
+    z /= np.linalg.norm(z) + 1e-12
+
+    cam_fwd = np.array([0.0, 0.0, 1.0], dtype=np.float64)  # camera Z axis (depth)
+    x_axis = cam_fwd - np.dot(cam_fwd, z) * z  # project forward into plane normal to z
+    nx = np.linalg.norm(x_axis)
+    if nx < 1e-8:
+        # If object z is (near) parallel to camera forward, fall back to camera X then Y.
+        cam_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        x_axis = cam_x - np.dot(cam_x, z) * z
+        nx = np.linalg.norm(x_axis)
+        if nx < 1e-8:
+            cam_y = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            x_axis = cam_y - np.dot(cam_y, z) * z
+            nx = np.linalg.norm(x_axis)
+
+    x_axis /= nx + 1e-12
+    y_axis = np.cross(z, x_axis)
+    y_axis /= np.linalg.norm(y_axis) + 1e-12
+    return np.stack([x_axis, y_axis, z], axis=1)
+
+
+def apply_rotate_z_in(R: np.ndarray, rotate_z_in: Optional[Sequence[float]]) -> np.ndarray:
+    """
+    Keep the estimated object z-axis (column 2 of R); rebuild x,y in the plane orthogonal to z.
+
+    rotate_z_in:
+      - None or (): leave R unchanged.
+      - [0]: yaw around z fixed to 0 (x aligned with camera-forward as much as possible).
+      - [0, P] with P in {90, 180, ...}: yaw angle (deg) reduced with np.mod(psi, P) into [0, P),
+        e.g. P=90 → 115° → 25°; then R' = R_ref @ Rz(psi_reduced).
+    """
+    if rotate_z_in is None:
+        return np.asarray(R, dtype=np.float64).copy()
+    rz = list(rotate_z_in)
+    if len(rz) == 0:
+        return np.asarray(R, dtype=np.float64).copy()
+
+    R = np.asarray(R, dtype=np.float64)
+    z_axis = R[:, 2]
+    R_ref = _orthonormal_basis_from_z(z_axis)
+    x_ref, y_ref = R_ref[:, 0], R_ref[:, 1]
+
+    if len(rz) == 1:
+        if float(rz[0]) != 0.0:
+            raise ValueError(f"rotate_z_in with one element must be [0], got {rotate_z_in!r}")
+        return R_ref
+
+    if len(rz) == 2:
+        lo, hi = float(rz[0]), float(rz[1])
+        if lo != 0.0:
+            raise ValueError(f"rotate_z_in two-element form must be [0, period], got {rotate_z_in!r}")
+        period = hi
+        if period <= 0:
+            raise ValueError(f"rotate_z_in period must be > 0, got {period}")
+        v = R[:, 0]
+        psi_rad = np.arctan2(np.dot(v, y_ref), np.dot(v, x_ref))
+        psi_deg = np.degrees(psi_rad)
+        psi_rem = float(np.mod(psi_deg, period))
+        Rz = Rotation.from_euler("z", psi_rem, degrees=True).as_matrix()
+        return R_ref @ Rz
+
+    raise ValueError(f"rotate_z_in must be [0], [0, period], or empty/None; got {rotate_z_in!r}")
 
 OBJECT_KEYS_TO_PARAMETERS = {
     "mustard": {"mesh_file": "./assets/hackathon2/mustard/mustard.obj", "symmetry_yaw_angles": "0,180", "target_object": "yellow bottle", "rotate_z_in":[0,180]},
@@ -164,6 +209,14 @@ class FoundationPoseROS2Node(Node):
         mesh_file_basename = os.path.basename(self.mesh_file)
         mesh_file_rn = mesh_file_basename.split(".")[0]
         self._marker_mesh_resource = f"file:///mesh_assets/{mesh_file_rn}/{mesh_file_basename}"
+
+        _abs_mesh = os.path.normpath(os.path.abspath(self.mesh_file))
+        self.rotate_z_in: Optional[Sequence[float]] = None
+        for params in OBJECT_KEYS_TO_PARAMETERS.values():
+            if os.path.normpath(os.path.abspath(params["mesh_file"])) == _abs_mesh:
+                self.rotate_z_in = params.get("rotate_z_in")
+                break
+        
 
         # Get debug directory and create if it doesn't exist
         self.debug_dir = self.get_parameter("debug_dir").value
@@ -218,6 +271,7 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
         self.get_logger().debug(f"Symmetry yaw angles: {self.symmetry_yaw_angles}")
+        self.get_logger().debug(f"Rotate z in: {self.rotate_z_in}")
         
         self.K = None # to be set by camera info callback
         self.est = None # to be set by estimator initialization
@@ -414,6 +468,7 @@ class FoundationPoseROS2Node(Node):
             
             self.symmetry_yaw_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_yaw_angles"]
             self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
+            self.rotate_z_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("rotate_z_in")
             
             del self.est.scorer # delete the old score predictor
             del self.est.refiner # delete the old score and refine predictors
@@ -698,6 +753,7 @@ class FoundationPoseROS2Node(Node):
             # Convert pose to object coordinates
             R_cam = center_pose[:3, :3]
             t_cam = center_pose[:3, 3]
+            R_cam = apply_rotate_z_in(R_cam, self.rotate_z_in)
 
             pose_msg = PoseStamped()
             pose_msg.header.stamp = color_msg.header.stamp
