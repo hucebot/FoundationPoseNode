@@ -112,3 +112,13 @@ ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'yel
   - `All` : at every iteration, will offset the yaw to be in 0-90 deg
   - `Force0` : at every iteration will put the yaw to 0 (e.g. for round objects)
 - `symmetry_yaw_angles`: intialize symmetry transforms on the `z` axis for Foundation Pose (reduces the number of initial hypothesis), example : `0,90,180,270` for a "square" based object
+
+
+# Realsense camera driver
+To launch a realsense camera from the docker :
+
+```
+./launch_realsense.sh [camera_name]
+```
+
+If `[camera_name]` is not specified it will default to `realsense_default`
