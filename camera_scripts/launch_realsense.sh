@@ -1,7 +1,9 @@
 #!/bin/bash
 # Launch RealSense camera node + static TF to remap pointcloud frame
+# Usage: ./launch_realsense.sh [camera_name]
+#   camera_name defaults to realsense_default
 
-CAMERA_NAME="realsense_test"
+CAMERA_NAME="${1:-realsense_default}"
 NAMESPACE="rgbd"
 TARGET_FRAME="head_front_camera_link" # in the tiago TF tree
 SOURCE_FRAME="${CAMERA_NAME}_link" # in the realsense TF tree
@@ -14,7 +16,7 @@ ros2 run realsense2_camera realsense2_camera_node \
   -p enable_depth:=true \
   -p depth_module.depth_profile:="640x480x15" \
   -p rgb_camera.color_profile:="640x480x15" \
-  -p camera_name:="realsense_test" \
+  -p camera_name:="${CAMERA_NAME}" \
   -p pointcloud.enable:=true \
   -p align_depth.enable:=true \
   -p enable_infra1:=false \
@@ -34,7 +36,7 @@ echo "[realsense] Camera node PID: ${CAMERA_PID}"
 
 # Wait for the node to be up before publishing TF
 echo "[realsense] Waiting for node to come up..."
-until ros2 node list 2>/dev/null | grep -q "/${NAMESPACE}/camera"; do
+until ros2 node list 2>/dev/null | grep -q "/${NAMESPACE}/${CAMERA_NAME}"; do
   sleep 0.5
 done
 echo "[realsense] Node up."
