@@ -2,8 +2,9 @@
 __pycache__/
 debug_node/
 *.pt
-# assets/
+assets/
 build/
 *.pth
 NOTES.md
 assets_old/
+assets.zip

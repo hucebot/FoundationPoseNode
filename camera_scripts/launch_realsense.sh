@@ -1,23 +1,33 @@
 #!/bin/bash
 # Launch RealSense camera node + static TF to remap pointcloud frame
 
-NAMESPACE="realsense_head_front"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG="${1:-${SCRIPT_DIR}/camera_config.yaml}"
-TARGET_FRAME="head_front_camera_link"
-SOURCE_FRAME="camera_link"
-
-if [[ ! -f "${CONFIG}" ]]; then
-  echo "[realsense] ERROR: config file not found: ${CONFIG}" >&2
-  echo "[realsense] Usage: $(basename "$0") [/path/to/camera_config.yaml]" >&2
-  exit 1
-fi
+CAMERA_NAME="realsense_test"
+NAMESPACE="rgdb"
+TARGET_FRAME="head_front_camera_link" # in the tiago TF tree
+SOURCE_FRAME="${CAMERA_NAME}_link" # in the realsense TF tree
 
 echo "[realsense] Starting camera node..."
 ros2 run realsense2_camera realsense2_camera_node \
+  -r __node:=${CAMERA_NAME} -r __ns:=/${NAMESPACE} \
   --ros-args \
-  --remap __ns:=/${NAMESPACE} \
-  --params-file "${CONFIG}" &
+  -p enable_color:=true \
+  -p enable_depth:=true \
+  -p depth_module.depth_profile:="640x480x15" \
+  -p rgb_camera.color_profile:="640x480x15" \
+  -p camera_name:="realsense_test" \
+  -p pointcloud.enable:=true \
+  -p align_depth.enable:=true \
+  -p enable_infra1:=false \
+  -p enable_infra2:=false \
+  -p enable_gyro:=false \
+  -p enable_accel:=false \
+  -p depth_module.emitter_enabled:=1 \
+  -p depth_module.visual_preset:=5 \
+  -p publish_tf:=true \
+  -p unite_imu_method:=0 \
+  -p rgb_camera.enable_auto_exposure:=true \
+  -p pointcloud.ordered_pc:=true \
+  -p pointcloud.stream_filter:=1 &
 
 CAMERA_PID=$!
 echo "[realsense] Camera node PID: ${CAMERA_PID}"

@@ -1,8 +1,8 @@
 #!/bin/bash
 IsRunning=`docker ps -f name=foundationposev2 | grep -c "foundationposev2"`;
+DIR=$(pwd)/
 if [ $IsRunning -eq "0" ]; then
     docker rm -f foundationposev2
-    DIR=$(pwd)/
     xhost +local:docker
     docker run \
         --name foundationposev2 \
@@ -34,7 +34,7 @@ if [ $IsRunning -eq "0" ]; then
         bash -c "cd $DIR && bash"
 else
     echo "Docker image is already running. Opening new terminal...";
-    docker exec -ti foundationposev2 /bin/bash
+    docker exec -ti foundationposev2 bash -c "cd $DIR && bash"
 fi
 
 # IsRunning=`docker ps -f name=foundationposev2 | grep -c "foundationposev2"`;
