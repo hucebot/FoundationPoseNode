@@ -58,10 +58,8 @@ docker build --network host -f docker/dockerfile -t foundationposev2 .
 ## Run
 ```
 bash ./docker/run_container.sh 
-python node.py --seg_model_type sam3 --target_object white\ bottle
-python node.py --seg_model_type sam3 --target_object mustard\ bottle --mesh_file ./assets/mustard/mustard.obj --enable_pose_tracking --resize_factor 2
-python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,60,90,120,150,180,210,240,270,300,330
-python node.py --resize_factor 2 --mesh_file ./assets/milk/ref_mesh.obj -sya 30,60,90,120,150,180,210,240,270,300,330 -frc Force0 --seg_model_type sam3 --target_object white\ bottle
+python node.py --resize_factor 2 --mesh_file ./assets/hackathon2/milk/milk.obj -sya 30,60,90,120,150,180,210,240,270,300,330 --seg_model_type sam3 --target_object white\ bottle -v warning
+python node.py --resize_factor 2 --mesh_file ./assets/hackathon2/gavottes/gavottes.obj -sya 0,180 --seg_model_type sam3 --target_object biscuit\ box -v warning
 ```
 
 Quick DDS/topic test (prints from callback only):
