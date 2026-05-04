@@ -2,7 +2,7 @@
 # Launch RealSense camera node + static TF to remap pointcloud frame
 
 CAMERA_NAME="realsense_test"
-NAMESPACE="rgdb"
+NAMESPACE="rgbd"
 TARGET_FRAME="head_front_camera_link" # in the tiago TF tree
 SOURCE_FRAME="${CAMERA_NAME}_link" # in the realsense TF tree
 

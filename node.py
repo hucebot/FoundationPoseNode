@@ -86,22 +86,53 @@ def decode_compressed_depth(msg: CompressedImage, scale: float = 0.001) -> np.nd
 
     return depth_img * scale
 
-
 def symmetry_tfs_from_yaw_angles(yaw_angles):
-    symmetry_tfs = [] # list of 4x4 numpy arrays
+    symmetry_tfs = []
     for yaw_angle in yaw_angles:
-        symmetry_yaw_rotation = Rotation.from_euler("zxy", [yaw_angle, 0, 0], degrees=True)
-        symmetry_yaw_rotation_matrix = symmetry_yaw_rotation.as_matrix() # 3x3 rotation matrix
-        symmetry_tf_matrix = np.eye(4)
-        symmetry_tf_matrix[:3, :3] = symmetry_yaw_rotation_matrix
-        symmetry_tfs.append(symmetry_tf_matrix)
+        # Pure Z rotation for Z-up meshes
+        r = Rotation.from_euler("z", yaw_angle, degrees=True)
+        tf = np.eye(4)
+        tf[:3, :3] = r.as_matrix()
+        symmetry_tfs.append(tf)
     return np.array(symmetry_tfs)
 
+def force_zero_yaw(r_matrix):
+    """
+    Forces the local Z-rotation to 0 while preserving the 
+    direction of the Z-axis (tilt/pitch/roll).
+    """
+    # 1. Extract rotation matrix
+    # R = pose_matrix[:3, :3]
+    R = r_matrix
+    
+    # 2. Get the current Z-axis vector (the 'spine' of your object)
+    # In a rotation matrix, the 3rd column is the local Z-axis in camera space
+    z_axis = R[:, 2] 
+    
+    # 3. Create a new 'X' axis that is perpendicular to the world 'Up' 
+    # and the object's spine. This removes the 'spin' (yaw).
+    # Assuming Camera Y is 'down', let's use a reference vector.
+    ref = np.array([0, 1, 0]) 
+    x_axis = np.cross(ref, z_axis)
+    x_axis /= (np.linalg.norm(x_axis) + 1e-6)
+    
+    # 4. Reconstruct Y to ensure orthogonality
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis /= (np.linalg.norm(y_axis) + 1e-6)
+    
+    # 5. Build the new rotation matrix
+    new_R = np.stack([x_axis, y_axis, z_axis], axis=1)
+    
+    return new_R
 
 OBJECT_KEYS_TO_PARAMETERS = {
-    "mustard": {"mesh_file": "./assets/mustard/mustard.obj", "symmetry_yaw_angles": "0,180", "target_object": "yellow bottle", "fix_rotation_convention": "None"},
-    "juice": {"mesh_file": "./assets/juice/juice.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "bottle", "fix_rotation_convention": "All"},
-    "milk": {"mesh_file": "./assets/milk/milk.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "white bottle", "fix_rotation_convention": "Force0"},
+    "mustard": {"mesh_file": "./assets/hackathon2/mustard/mustard.obj", "symmetry_yaw_angles": "0,180", "target_object": "yellow bottle", "rotate_z_in":[0,180]},
+    "juice": {"mesh_file": "./assets/hackathon2/juice/juice.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "bottle", "rotate_z_in":[0,90]},
+    "milk": {"mesh_file": "./assets/hackathon2/milk/milk.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "white bottle", "rotate_z_in": [0]},
+    "plate": {"mesh_file": "./assets/hackathon2/plate/plate.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "red plate", "rotate_z_in": [0]},
+    "gavottes": {"mesh_file": "./assets/hackathon2/gavottes/gavottes.obj", "symmetry_yaw_angles": "0,180", "target_object": "biscuit box", "rotate_z_in": [0,180]},
+    "bowl": {"mesh_file": "./assets/hackathon2/bowl/bowl.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "green bowl", "rotate_z_in": [0]},
+
 }
 
 class FoundationPoseROS2Node(Node):
@@ -131,7 +162,8 @@ class FoundationPoseROS2Node(Node):
         self.mesh_file = self.get_parameter("mesh_file").value
         assert(os.path.exists(self.mesh_file)), f"Mesh file {self.mesh_file} does not exist"
         mesh_file_basename = os.path.basename(self.mesh_file)
-        self._marker_mesh_resource = f"file:///{mesh_file_basename}"
+        mesh_file_rn = mesh_file_basename.split(".")[0]
+        self._marker_mesh_resource = f"file:///mesh_assets/{mesh_file_rn}/{mesh_file_basename}"
 
         # Get debug directory and create if it doesn't exist
         self.debug_dir = self.get_parameter("debug_dir").value
@@ -155,8 +187,10 @@ class FoundationPoseROS2Node(Node):
         self.min_initial_detection_counter = args.min_initial_detection_counter
         self.enable_pose_tracking = args.enable_pose_tracking
         self.seg_model_type = args.seg_model_type
-        self.fix_rotation_convention = args.fix_rotation_convention
         self.symmetry_yaw_angles = args.symmetry_yaw_angles
+        self.fp_verbosity = args.fp_verbosity
+        if self.fp_verbosity not in ["debug", "info", "warning", "error", "critical"]:
+            raise ValueError(f"Invalid verbosity: {self.fp_verbosity}. Valid: debug, info, warning, error, critical")
         
         # Make some checks on the parameters
         assert(self.seg_model_type in ["sam3", "yolo"]), f"Invalid segmentation model type: {self.seg_model_type}"
@@ -183,7 +217,6 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Resize factor: {self.resize_factor}")
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
-        self.get_logger().debug(f"Fix rotation convention: {self.fix_rotation_convention}")
         self.get_logger().debug(f"Symmetry yaw angles: {self.symmetry_yaw_angles}")
         
         self.K = None # to be set by camera info callback
@@ -191,13 +224,12 @@ class FoundationPoseROS2Node(Node):
         self.current_phase = "NotInitialized"
         self.pose_last = None
         self.to_origin = None
-        self.object_initial_yaw_offset = None
         self.bbox = None
         self.frame_count = 0
         self._lock = threading.Lock()
         self._processing = False
         
-        self.is_on = False
+        self.is_on = True #False
         
         self.initial_detection_counter = 0
         
@@ -205,11 +237,12 @@ class FoundationPoseROS2Node(Node):
         self.rgbd_frames_counter_processed = 0
         
         # Set logger and seed (for estimater)
-        set_logging_format()
+        verbosity = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR, "critical": logging.CRITICAL}
+        set_logging_format(level=verbosity[self.fp_verbosity])
         set_seed(0)
 
         # Load mesh and compute bounds
-        mesh = trimesh.load(self.mesh_file, force="mesh")
+        mesh = trimesh.load(self.mesh_file, force="mesh", skip_materials=True)
         self.to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
         self.bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
         self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
@@ -351,7 +384,6 @@ class FoundationPoseROS2Node(Node):
             if self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
                 self.get_logger().info("Stopping pose tracking back to detecting for later")
                 self.current_phase = "DetectingAgain"
-                self.object_initial_yaw_offset = None
 
     def _target_object_cb(self, msg: String):
         new_target = msg.data.strip()
@@ -375,11 +407,13 @@ class FoundationPoseROS2Node(Node):
                 self.get_logger().error(f"Mesh file {self.mesh_file} does not exist")
                 self._lock.release()
                 return
-            self._marker_mesh_resource = f"file://{os.path.abspath(self.mesh_file)}"
+            
+            basename = os.path.basename(self.mesh_file)
+            rn = basename.split(".")[0]
+            self._marker_mesh_resource = f"file:///mesh_assets/{rn}/{basename}"
             
             self.symmetry_yaw_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_yaw_angles"]
             self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
-            self.fix_rotation_convention = OBJECT_KEYS_TO_PARAMETERS[key_name]["fix_rotation_convention"]
             
             del self.est.scorer # delete the old score predictor
             del self.est.refiner # delete the old score and refine predictors
@@ -390,7 +424,7 @@ class FoundationPoseROS2Node(Node):
             torch.cuda.empty_cache()
 
             # Load mesh and compute bounds
-            mesh = trimesh.load(self.mesh_file, force="mesh")
+            mesh = trimesh.load(self.mesh_file, force="mesh", skip_materials=True)
             self.to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
             self.bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
             self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
@@ -426,7 +460,6 @@ class FoundationPoseROS2Node(Node):
             if self.current_phase in ("PoseTracking", "StartPoseTracking", "DetectingAgain"):
                 self.current_phase = "DetectingAgain"
             self.initial_detection_counter = 0
-            self.object_initial_yaw_offset = None            
             
             self.current_phase = "DetectingAgain"
             self._lock.release()
@@ -446,7 +479,6 @@ class FoundationPoseROS2Node(Node):
             if self.current_phase in ("PoseTracking", "StartPoseTracking", "DetectingAgain"):
                 self.current_phase = "DetectingAgain"
             self.initial_detection_counter = 0
-            self.object_initial_yaw_offset = None
 
     def _publish_marker(self, pose_msg: PoseStamped):
         marker = Marker()
@@ -660,7 +692,8 @@ class FoundationPoseROS2Node(Node):
             self.get_logger().info(f"Tracking time: {track_timer_end - track_timer_start:.3f} seconds")
 
         if valid_pose:
-            center_pose = pose@np.linalg.inv(self.to_origin)
+            # center_pose = pose@np.linalg.inv(self.to_origin)
+            center_pose = pose
 
             # Convert pose to object coordinates
             R_cam = center_pose[:3, :3]
@@ -676,39 +709,12 @@ class FoundationPoseROS2Node(Node):
             r_cam = Rotation.from_matrix(R_cam)
             euler_cam = r_cam.as_euler('zxy', degrees=True)
             yaw_cam, pitch_cam, roll_cam = euler_cam
-            self.get_logger().info(f"Pose: t = {t_cam}, yaw = {yaw_cam:.2f} deg, pitch = {pitch_cam:.2f} deg, roll = {roll_cam:.2f} deg")
-            
-            if self.fix_rotation_convention != "None":
-                
-                if (self.fix_rotation_convention == "Initial" and self.object_initial_yaw_offset is None) or (self.fix_rotation_convention == "All"):
-                    # Remap yaw to [0, 90] by adding the right offset; leave pitch and roll unchanged
-                    # so only the z-axis angle is constrained (no axis flipping).
-                    # Either every time or only the first time, fix the yaw offset
-                    if yaw_cam > 0 and yaw_cam <= 90:
-                        self.object_initial_yaw_offset = 0
-                        self.get_logger().info("Yaw is between 0 and 90 degrees, no change")
-                    elif yaw_cam > 90 and yaw_cam <= 180:
-                        self.object_initial_yaw_offset = -90
-                        self.get_logger().info("Yaw 90..180 -> remap to 0..90 (offset -90)")
-                    elif yaw_cam > -180 and yaw_cam <= -90:
-                        self.object_initial_yaw_offset = 180
-                        self.get_logger().info("Yaw -180..-90 -> remap to 0..90 (offset +180)")
-                    elif yaw_cam > -90 and yaw_cam <= 0:
-                        self.object_initial_yaw_offset = 90
-                        self.get_logger().info("Yaw -90..0 -> remap to 0..90 (offset +90)")
-                    else:
-                        self.object_initial_yaw_offset = 0  # boundary
-                
-                if self.fix_rotation_convention == "Force0":
-                    new_yaw = 0
-                else:
-                    new_yaw = yaw_cam + self.object_initial_yaw_offset
-                
-                new_r_cam = Rotation.from_euler("zxy", [new_yaw, pitch_cam, roll_cam], degrees=True)
-                    
-            else:
-                new_r_cam = r_cam 
-                
+            self.get_logger().info(f"Pose: t = {t_cam}")
+            self.get_logger().info(f"R = {R_cam}")
+            self.get_logger().info(f"euler = {euler_cam}")
+            self.get_logger().info(f"yaw = {yaw_cam:.2f} deg, pitch = {pitch_cam:.2f} deg, roll = {roll_cam:.2f} deg")
+
+            new_r_cam = r_cam                 
             new_q_cam = new_r_cam.as_quat()
             
             pose_msg.pose.orientation.x = float(new_q_cam[0])
@@ -752,9 +758,9 @@ if __name__ == "__main__":
     parser.add_argument("--debug", type=int, default=1, help="Debug level.")
     parser.add_argument("--debug_dir", type=str, default="", help="Debug directory.")
     parser.add_argument("--depth_scale", type=float, default=0.001, help="Depth scale.")
-    parser.add_argument("--color_topic", type=str, default="/realsense_head_front/camera/color/image_raw/compressed", help="Color topic.")
-    parser.add_argument("--depth_topic", type=str, default="/realsense_head_front/camera/aligned_depth_to_color/image_raw/compressedDepth", help="Depth topic.")
-    parser.add_argument("--camera_info_topic", type=str, default="/realsense_head_front/camera/color/camera_info", help="Camera info topic.")
+    parser.add_argument("--color_topic", type=str, default="/rgbd/realsense_test/color/image_raw/compressed", help="Color topic.")
+    parser.add_argument("--depth_topic", type=str, default="/rgbd/realsense_test/aligned_depth_to_color/image_raw/compressedDepth", help="Depth topic.")
+    parser.add_argument("--camera_info_topic", type=str, default="/rgbd/realsense_test/color/camera_info", help="Camera info topic.")
     parser.add_argument("--pose_frame_id", type=str, default="camera_depth_optical_frame", help="Pose frame id.")
     parser.add_argument("--slop", type=float, default=1.0, help="Slop.")
     parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
@@ -762,8 +768,8 @@ if __name__ == "__main__":
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
-    parser.add_argument("--fix_rotation_convention", "-frc", type=str, default="None", help="Fix rotation convention. Either 'None', 'Initial', 'All', 'Force0.")
     parser.add_argument("--symmetry_yaw_angles", "-sya", type=str, default=None, help="Symmetry yaw angles. Format: 'yaw1,yaw2,yaw3,...'. Empty = no symmetry transforms.")
+    parser.add_argument("--fp_verbosity", "-v", type=str, default="info", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     args = parser.parse_args()
     main(args)
 
