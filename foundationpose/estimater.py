@@ -26,7 +26,14 @@ class FoundationPose:
     os.makedirs(debug_dir, exist_ok=True)
 
     self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh)
-    self.make_rotation_grid(min_n_views=40, inplane_step=60)
+    if len(symmetry_tfs)>0:
+      min_n_view = int(len(symmetry_tfs)/2)*40
+      inplane_step = max(15, int(60 / (len(symmetry_tfs) / 2)))
+      logging.info(f"min_n_view:{min_n_view}, inplane_step:{inplane_step} (len(symmetry_tfs):{len(symmetry_tfs)})")
+      # allow more if there are symmetry transforms
+      self.make_rotation_grid(min_n_views=min_n_view, inplane_step=inplane_step)
+    else:
+      self.make_rotation_grid(min_n_views=40, inplane_step=60)
 
     self.glctx = glctx
 
