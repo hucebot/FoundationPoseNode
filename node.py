@@ -41,6 +41,120 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 from scipy.spatial.transform import Rotation
 
 
+def _quat_normalize_xyzw(q: np.ndarray) -> np.ndarray:
+    q = np.asarray(q, dtype=np.float64).reshape(4)
+    n = float(np.linalg.norm(q))
+    if n <= 0.0:
+        return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+    return q / n
+
+
+def _quat_slerp_xyzw(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
+    """
+    Spherical linear interpolation between quaternions in xyzw convention.
+    Ensures shortest-path by flipping q1 if needed.
+    """
+    q0 = _quat_normalize_xyzw(q0)
+    q1 = _quat_normalize_xyzw(q1)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+
+    dot = float(np.clip(dot, -1.0, 1.0))
+    if dot > 0.9995:
+        # Nearly identical: fall back to lerp
+        return _quat_normalize_xyzw(q0 + t * (q1 - q0))
+
+    theta_0 = float(np.arccos(dot))
+    sin_theta_0 = float(np.sin(theta_0))
+    theta = theta_0 * float(t)
+    sin_theta = float(np.sin(theta))
+
+    s0 = float(np.sin(theta_0 - theta) / sin_theta_0)
+    s1 = float(sin_theta / sin_theta_0)
+    return _quat_normalize_xyzw((s0 * q0) + (s1 * q1))
+
+
+class PoseFilter:
+    """
+    Position: Kalman filter (constant velocity), state [pos(3), vel(3)].
+    Orientation: exponential smoothing via SLERP.
+    """
+
+    def __init__(self):
+        self.initialized = False
+        self.pos = np.zeros(3, dtype=np.float64)
+        self.vel = np.zeros(3, dtype=np.float64)
+        self.quat_xyzw = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+        self.P = np.eye(6, dtype=np.float64)
+
+    def reset(self):
+        self.initialized = False
+
+    def update(
+        self,
+        dt: float,
+        meas_pos: np.ndarray,
+        meas_quat_xyzw: np.ndarray,
+        process_noise: float = 0.1,
+        meas_noise: float = 0.05,
+        slerp_factor: float = 0.15,
+        max_dt_reinit: float = 1.0,
+    ):
+        meas_pos = np.asarray(meas_pos, dtype=np.float64).reshape(3)
+        meas_quat_xyzw = _quat_normalize_xyzw(meas_quat_xyzw)
+        dt = float(dt)
+
+        if (not self.initialized) or (dt > max_dt_reinit):
+            # (Re)initialize when starting, or when the time gap suggests tracking was lost.
+            # We trust the measurement fully and reset velocity to 0.
+            self.pos = meas_pos.copy()
+            self.vel = np.zeros(3, dtype=np.float64)
+            self.quat_xyzw = meas_quat_xyzw.copy()
+            self.P = np.eye(6, dtype=np.float64)
+            self.initialized = True
+            return
+
+        # --- Position KF (Constant Velocity) ---
+        # State is x = [p, v]^T with p in meters and v in meters/second.
+        # Motion model assumes constant velocity between frames:
+        #   p_k = p_{k-1} + v_{k-1} * dt
+        #   v_k = v_{k-1}
+        # So the state transition is:
+        #   x_k = F x_{k-1} + w,  with w ~ N(0, Q)
+        F = np.eye(6, dtype=np.float64)
+        F[:3, 3:] = np.eye(3, dtype=np.float64) * dt
+
+        # Q: process noise covariance. 
+        Q = np.eye(6, dtype=np.float64) * float(process_noise)
+        x_pred = np.concatenate([self.pos, self.vel], axis=0).reshape(6, 1)
+        x_pred = F @ x_pred
+        P_pred = (F @ self.P @ F.T) + Q
+
+        # H maps state -> measured components (extract p from [p, v]).
+        H = np.zeros((3, 6), dtype=np.float64)
+        H[:3, :3] = np.eye(3, dtype=np.float64)
+
+        # R: measurement noise covariance.
+        Rm = np.eye(3, dtype=np.float64) * float(meas_noise)
+        S = (H @ P_pred @ H.T) + Rm
+        K = P_pred @ H.T @ np.linalg.inv(S)
+
+        # Innovation/residual y = z - H x_pred, then correction x_upd = x_pred + K y.
+        y = (meas_pos.reshape(3, 1) - (H @ x_pred))
+        x_upd = x_pred + (K @ y)
+
+        self.P = (np.eye(6, dtype=np.float64) - (K @ H)) @ P_pred
+        self.pos = x_upd[:3, 0]
+        self.vel = x_upd[3:, 0]
+
+        # --- Orientation Smoothing (SLERP) ---
+        # Orientation is not filtered with a full EKF here; we just smooth the measured quaternion.
+        # slerp_factor in (0,1]: lower = more smoothing/lag, higher = more responsive.
+        self.quat_xyzw = _quat_slerp_xyzw(self.quat_xyzw, meas_quat_xyzw, float(slerp_factor))
+
+
 
 DET_NAMES = {
     0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus',
@@ -199,6 +313,10 @@ class FoundationPoseROS2Node(Node):
         self.declare_parameter("slop", args.slop)
         self.declare_parameter("marker_mesh_scale", 1.0)
         self.declare_parameter("marker_mesh_use_embedded_materials", True)
+        self.declare_parameter("pose_filter_process_noise", 0.1)
+        self.declare_parameter("pose_filter_meas_noise", 0.05)
+        self.declare_parameter("pose_filter_slerp_factor", 0.15)
+        self.declare_parameter("pose_filter_reset_lost_frames", 15)
 
         # Set current code directory
         code_dir = os.path.dirname(os.path.realpath(__file__))
@@ -242,6 +360,7 @@ class FoundationPoseROS2Node(Node):
         self.seg_model_type = args.seg_model_type
         self.symmetry_yaw_angles = args.symmetry_yaw_angles
         self.fp_verbosity = args.fp_verbosity
+        self.use_kalman_filter = args.use_kalman_filter
         if self.fp_verbosity not in ["debug", "info", "warning", "error", "critical"]:
             raise ValueError(f"Invalid verbosity: {self.fp_verbosity}. Valid: debug, info, warning, error, critical")
         
@@ -272,6 +391,7 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
         self.get_logger().debug(f"Symmetry yaw angles: {self.symmetry_yaw_angles}")
         self.get_logger().debug(f"Rotate z in: {self.rotate_z_in}")
+        self.get_logger().debug(f"Use Kalman filter: {self.use_kalman_filter}")
         
         self.K = None # to be set by camera info callback
         self.est = None # to be set by estimator initialization
@@ -284,6 +404,7 @@ class FoundationPoseROS2Node(Node):
         self._processing = False
         
         self.is_on = True #False
+        self._prev_is_on = self.is_on
         
         self.initial_detection_counter = 0
         
@@ -429,10 +550,34 @@ class FoundationPoseROS2Node(Node):
         self.current_phase = "WaitingForCameraInfo"
         
         self.get_logger().info("FoundationPose ROS2 node initialized")
+        
+        # Optional pose filter (position KF + orientation SLERP smoothing)
+        self._pose_filter = PoseFilter()
+        self._pose_filter_last_stamp_s: Optional[float] = None
+        self._pose_filter_lost_frames = 0
+
+    def _reset_pose_filter(self, reason: str):
+        self._pose_filter.reset()
+        self._pose_filter_last_stamp_s = None
+        self._pose_filter_lost_frames = 0
+        self.get_logger().info(f"Pose filter reset: {reason}")
+
+    def _note_pose_lost_for_filter(self):
+        if not self.use_kalman_filter:
+            return
+        self._pose_filter_lost_frames += 1
+        lost_thr = int(self.get_parameter("pose_filter_reset_lost_frames").value)
+        if self._pose_filter_lost_frames > lost_thr:
+            self._reset_pose_filter(f"object lost for > {lost_thr} frames")
 
     def _toggle_fp_cb(self, msg: Bool):
+        prev = self.is_on
         self.is_on = msg.data
+        self._prev_is_on = prev
         self.get_logger().info(f"FoundationPose toggled: is_on = {self.is_on}")
+        
+        if (not prev) and self.is_on:
+            self._reset_pose_filter("node toggled off->on")
         
         if msg.data == False:
             if self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
@@ -518,6 +663,7 @@ class FoundationPoseROS2Node(Node):
             
             self.current_phase = "DetectingAgain"
             self._lock.release()
+            self._reset_pose_filter("mesh/target object updated")
             return
         
         else:
@@ -534,6 +680,7 @@ class FoundationPoseROS2Node(Node):
             if self.current_phase in ("PoseTracking", "StartPoseTracking", "DetectingAgain"):
                 self.current_phase = "DetectingAgain"
             self.initial_detection_counter = 0
+            self._reset_pose_filter("target object changed")
 
     def _publish_marker(self, pose_msg: PoseStamped):
         marker = Marker()
@@ -581,6 +728,7 @@ class FoundationPoseROS2Node(Node):
         
         if not self.is_on:
             self.get_logger().info("Node is off, skipping RGBD message")
+            self._reset_pose_filter("node is off")
             return
         
         # Skip if already processing something
@@ -649,6 +797,7 @@ class FoundationPoseROS2Node(Node):
                 results = self.seg_model(text=[self.target_object])
                 if results is None:
                     self.get_logger().warn(f"No results from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
+                    self._note_pose_lost_for_filter()
                     self._lock.acquire()
                     self._processing = False
                     self._lock.release()
@@ -656,6 +805,7 @@ class FoundationPoseROS2Node(Node):
                 target_masks = results[0].masks #.data.cpu().numpy()
                 if target_masks is None:
                     self.get_logger().warn(f"No target masks from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
+                    self._note_pose_lost_for_filter()
                     self._lock.acquire()
                     self._processing = False
                     self._lock.release()
@@ -758,10 +908,7 @@ class FoundationPoseROS2Node(Node):
             pose_msg = PoseStamped()
             pose_msg.header.stamp = color_msg.header.stamp
             pose_msg.header.frame_id = self.pose_frame_id
-            pose_msg.pose.position.x = float(t_cam[0])
-            pose_msg.pose.position.y = float(t_cam[1])
-            pose_msg.pose.position.z = float(t_cam[2])
-            
+
             r_cam = Rotation.from_matrix(R_cam)
             euler_cam = r_cam.as_euler('zxy', degrees=True)
             yaw_cam, pitch_cam, roll_cam = euler_cam
@@ -772,6 +919,32 @@ class FoundationPoseROS2Node(Node):
 
             new_r_cam = r_cam                 
             new_q_cam = new_r_cam.as_quat()
+
+            # add optional filter
+            if self.use_kalman_filter:
+                stamp_s = float(color_msg.header.stamp.sec) + (float(color_msg.header.stamp.nanosec) * 1e-9)
+                if self._pose_filter_last_stamp_s is None:
+                    dt = 1e9  # forces initialization
+                else:
+                    dt = max(0.0, stamp_s - float(self._pose_filter_last_stamp_s))
+                self._pose_filter_last_stamp_s = stamp_s
+
+                self._pose_filter_lost_frames = 0
+                self._pose_filter.update(
+                    dt=dt,
+                    meas_pos=t_cam,
+                    meas_quat_xyzw=new_q_cam,
+                    process_noise=float(self.get_parameter("pose_filter_process_noise").value),
+                    meas_noise=float(self.get_parameter("pose_filter_meas_noise").value),
+                    slerp_factor=float(self.get_parameter("pose_filter_slerp_factor").value),
+                )
+                t_cam = self._pose_filter.pos.copy()
+                new_q_cam = self._pose_filter.quat_xyzw.copy()
+
+
+            pose_msg.pose.position.x = float(t_cam[0])
+            pose_msg.pose.position.y = float(t_cam[1])
+            pose_msg.pose.position.z = float(t_cam[2])
             
             pose_msg.pose.orientation.x = float(new_q_cam[0])
             pose_msg.pose.orientation.y = float(new_q_cam[1])
@@ -779,6 +952,8 @@ class FoundationPoseROS2Node(Node):
             pose_msg.pose.orientation.w = float(new_q_cam[3])
             self._pose_pub.publish(pose_msg)
             self._publish_marker(pose_msg)
+        else:
+            self._note_pose_lost_for_filter()
 
         # Finish processing by releasing the lock
         self._lock.acquire()
@@ -814,13 +989,15 @@ if __name__ == "__main__":
     parser.add_argument("--debug", type=int, default=1, help="Debug level.")
     parser.add_argument("--debug_dir", type=str, default="", help="Debug directory.")
     parser.add_argument("--depth_scale", type=float, default=0.001, help="Depth scale.")
+    parser.add_argument("--camera_name", type=str, default="realsense_head_front", help="Camera name.")
     
     # paremters depending on the camera name
-    parser.add_argument("--color_topic", type=str, default="/rgbd/realsense_head_front/color/image_raw/compressed", help="Color topic.")
-    parser.add_argument("--depth_topic", type=str, default="/rgbd/realsense_head_front/aligned_depth_to_color/image_raw/compressedDepth", help="Depth topic.")
-    parser.add_argument("--camera_info_topic", type=str, default="/rgbd/realsense_head_front/color/camera_info", help="Camera info topic.")
-    parser.add_argument("--pose_frame_id", type=str, default="realsense_head_front_depth_optical_frame", help="Pose frame id.")
+    # parser.add_argument("--color_topic", type=str, default="/rgbd/realsense_test/color/image_raw/compressed", help="Color topic.")
+    # parser.add_argument("--depth_topic", type=str, default="/rgbd/realsense_test/aligned_depth_to_color/image_raw/compressedDepth", help="Depth topic.")
+    # parser.add_argument("--camera_info_topic", type=str, default="/rgbd/realsense_test/color/camera_info", help="Camera info topic.")
+    # parser.add_argument("--pose_frame_id", type=str, default="realsense_test_depth_optical_frame", help="Pose frame id.")
     
+    parser.add_argument("--use_kalman_filter", "-kf", action="store_true", default=False, help="Use Kalman filter for pose estimation.")
     parser.add_argument("--slop", type=float, default=1.0, help="Slop.")
     parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
     parser.add_argument("--seg_model_name", type=str, default="yolo26n-seg.pt", help="Segmentation model name.")
@@ -830,6 +1007,12 @@ if __name__ == "__main__":
     parser.add_argument("--symmetry_yaw_angles", "-sya", type=str, default=None, help="Symmetry yaw angles. Format: 'yaw1,yaw2,yaw3,...'. Empty = no symmetry transforms.")
     parser.add_argument("--fp_verbosity", "-v", type=str, default="info", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     args = parser.parse_args()
+    
+    args.color_topic = f"/rgbd/{args.camera_name}/color/image_raw/compressed"
+    args.depth_topic = f"/rgbd/{args.camera_name}/aligned_depth_to_color/image_raw/compressedDepth"
+    args.camera_info_topic = f"/rgbd/{args.camera_name}/color/camera_info"
+    args.pose_frame_id = f"{args.camera_name}_depth_optical_frame"
+    
     main(args)
 
         
