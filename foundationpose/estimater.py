@@ -26,7 +26,8 @@ class FoundationPose:
     os.makedirs(debug_dir, exist_ok=True)
 
     self.reset_object(model_pts, model_normals, symmetry_tfs=symmetry_tfs, mesh=mesh)
-    if len(symmetry_tfs)>0:
+    
+    if symmetry_tfs is not None and len(symmetry_tfs)>0:
       min_n_view = int(len(symmetry_tfs)/2)*40
       inplane_step = max(15, int(60 / (len(symmetry_tfs) / 2)))
       logging.info(f"min_n_view:{min_n_view}, inplane_step:{inplane_step} (len(symmetry_tfs):{len(symmetry_tfs)})")

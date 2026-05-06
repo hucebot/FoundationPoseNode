@@ -120,3 +120,10 @@ To launch a realsense camera from the docker :
 ```
 
 If `[camera_name]` is not specified it will default to `realsense_default`
+
+## TODO
+- [] Handle all kind of symmetries (not only Z axis)
+- [] Simplify the cluster_poses for infinite symmetry of round objects
+- [] Add another kind of filtering to avoid flipping
+- [] Check point-cloud stability for depth estimation (inc. in fridge)
+- [] Better referencing of objects for detection
