@@ -9,7 +9,7 @@ Follow the instructions of https://github.com/facebookresearch/sam-3d-objects/bl
 To install on Jean-Zay you may use the `prepost` partition that has internet access. 
 Start by following the procedure to install using mamba or conda.
 
-Then follow https://github.com/lapertme2/sam-3d-objects-win/blob/main/JUST-RUN-DEMO.md regarding the issue of downloading MoGE checkpoint :
+Then following ideas of [this](https://github.com/lapertme2/sam-3d-objects-win/blob/main/JUST-RUN-DEMO.md) regarding the issue of downloading MoGE checkpoint :
 ```
 wget https://huggingface.co/Ruicheng/moge-vitl/resolve/main/model.pt
 mv model.pt checkpoints/hf
