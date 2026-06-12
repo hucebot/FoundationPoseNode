@@ -7,6 +7,13 @@ Follow the instructions of https://github.com/facebookresearch/sam-3d-objects/bl
 
 ## Install on cluster (with no internet access on nodes)
 To install on Jean-Zay you may use the `prepost` partition that has internet access. 
+
+After following the instructions additionnally install `nvdiffrast`
+```
+pip install setuptools wheel ninja
+pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation
+```
+
 Start by following the procedure to install using mamba or conda.
 
 Then following ideas of [this](https://github.com/lapertme2/sam-3d-objects-win/blob/main/JUST-RUN-DEMO.md) regarding the issue of downloading MoGE checkpoint :
@@ -41,3 +48,6 @@ Move back results to your local computer
 ```
 scp -r jean-zay:/lustre/fswork/projects/rech/lfh/ufg41mh/Projects/github/sam-3d-objects/output/  ./assets/assets_creation/
 ```
+
+# 3. Use meshlab to rescale and rotate if necessary
+If necessary : scale and rotate (z-up) using meshlab, export as .obj with texture first
