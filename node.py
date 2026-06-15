@@ -294,20 +294,75 @@ def apply_rotate_z_in(R: np.ndarray, rotate_z_in: Optional[Sequence[float]]) -> 
 # }
 
 OBJECT_KEYS_TO_PARAMETERS = {
-    "baguette" : {"mesh_file": "./assets/hackathon3/baguette/baguette.obj", "symmetry_yaw_angles": "", "target_object": "bread", "rotate_z_in": None},
-    "banana" : {"mesh_file": "./assets/hackathon3/banana/banana.obj", "symmetry_yaw_angles": "", "target_object": "banana", "rotate_z_in": None},
-    "coffeecan" : {"mesh_file": "./assets/hackathon3/coffeecan/coffeecan.obj", "symmetry_yaw_angles": "", "target_object": "blue container", "rotate_z_in": None},
-    "egg" : {"mesh_file": "./assets/hackathon3/egg/egg.obj", "symmetry_yaw_angles": "", "target_object": "egg", "rotate_z_in": None},
-    "flowercup" : {"mesh_file": "./assets/hackathon3/flowercup/flowercup.obj", "symmetry_yaw_angles": "", "target_object": "yellow mug", "rotate_z_in": None},
-    "jam" : {"mesh_file": "./assets/hackathon3/jam/jam.obj", "symmetry_yaw_angles": "", "target_object": "jam", "rotate_z_in": None},
-    "milk" : {"mesh_file": "./assets/hackathon3/milk/milk.obj", "symmetry_yaw_angles": "", "target_object": "white bottle", "rotate_z_in": None},
-    "minicheese" : {"mesh_file": "./assets/hackathon3/minicheese/minicheese.obj", "symmetry_yaw_angles": "", "target_object": "cheese", "rotate_z_in": None},
-    "pan" : {"mesh_file": "./assets/hackathon3/pan/pan.obj", "symmetry_yaw_angles": "", "target_object": "pan", "rotate_z_in": None},
-    "redapple" : {"mesh_file": "./assets/hackathon3/redapple/redapple.obj", "symmetry_yaw_angles": "", "target_object": "red apple", "rotate_z_in": None},
-    "smallmilk" : {"mesh_file": "./assets/hackathon3/smallmilk/smallmilk.obj", "symmetry_yaw_angles": "", "target_object": "white bottle", "rotate_z_in": None},
-    "smallsanpellegrino" : {"mesh_file": "./assets/hackathon3/smallsanpellegrino/smallsanpellegrino.obj", "symmetry_yaw_angles": "", "target_object": "green bottle", "rotate_z_in": None},
-    "spam" : {"mesh_file": "./assets/hackathon3/spam/spam.obj", "symmetry_yaw_angles": "", "target_object": "blue container", "rotate_z_in": None},
-    "ycbmustard" : {"mesh_file": "./assets/hackathon3/ycbmustard/ycbmustard.obj", "symmetry_yaw_angles": "", "target_object": "yellow bottle", "rotate_z_in": None},
+    "baguette" : {"mesh_file": "./assets/hackathon3/baguette/baguette.obj", 
+                  "symmetry_yaw_angles": "", 
+                  "target_object": "bread", 
+                  "rotate_z_in": None},
+    
+    "banana" : {"mesh_file": "./assets/hackathon3/banana/banana.obj", 
+                "symmetry_yaw_angles": "", 
+                "target_object": "banana", 
+                "rotate_z_in": None},
+    
+    "coffeecan" : {"mesh_file": "./assets/hackathon3/coffeecan/coffeecan.obj", 
+                   "symmetry_yaw_angles": "", 
+                   "target_object": "blue container", 
+                   "rotate_z_in": None},
+    
+    "egg" : {"mesh_file": "./assets/hackathon3/egg/egg.obj", 
+             "symmetry_yaw_angles": "", 
+             "target_object": "egg", 
+             "rotate_z_in": None},
+    
+    "flowercup" : {"mesh_file": "./assets/hackathon3/flowercup/flowercup.obj", 
+                   "symmetry_yaw_angles": "", 
+                   "target_object": "yellow mug", 
+                   "rotate_z_in": None},
+    
+    "jam" : {"mesh_file": "./assets/hackathon3/jam/jam.obj", 
+             "symmetry_yaw_angles": "", 
+             "target_object": "jam", 
+             "rotate_z_in": None},
+    
+    "milk" : {"mesh_file": "./assets/hackathon3/milk/milk.obj", 
+              "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
+              "target_object": "white bottle", 
+              "rotate_z_in": None},
+    
+    "minicheese" : {"mesh_file": "./assets/hackathon3/minicheese/minicheese.obj", 
+                    "symmetry_yaw_angles": "", 
+                    "target_object": "cheese", 
+                    "rotate_z_in": None},
+    
+    "pan" : {"mesh_file": "./assets/hackathon3/pan/pan.obj", 
+             "symmetry_yaw_angles": "", 
+             "target_object": "pan", 
+             "rotate_z_in": None},
+    
+    "redapple" : {"mesh_file": "./assets/hackathon3/redapple/redapple.obj", 
+                  "symmetry_yaw_angles": "", 
+                  "target_object": "red apple", 
+                  "rotate_z_in": None},
+    
+    "smallmilk" : {"mesh_file": "./assets/hackathon3/smallmilk/smallmilk.obj", 
+                   "symmetry_yaw_angles": "", 
+                   "target_object": "white bottle", 
+                   "rotate_z_in": None},
+    
+    "smallsanpellegrino" : {"mesh_file": "./assets/hackathon3/smallsanpellegrino/smallsanpellegrino.obj", 
+                            "symmetry_yaw_angles": "", 
+                            "target_object": "green bottle", 
+                            "rotate_z_in": None},
+    
+    "spam" : {"mesh_file": "./assets/hackathon3/spam/spam.obj", 
+              "symmetry_yaw_angles": "", 
+              "target_object": "blue container", 
+              "rotate_z_in": None},
+    
+    "ycbmustard" : {"mesh_file": "./assets/hackathon3/ycbmustard/ycbmustard.obj", 
+                    "symmetry_yaw_angles": "0,180", 
+                    "target_object": "yellow bottle", 
+                    "rotate_z_in": [0,180]},
 }
 
 class FoundationPoseROS2Node(Node):
@@ -1026,7 +1081,7 @@ if __name__ == "__main__":
     
     args.color_topic = f"/rgbd/{args.camera_name}/color/image_raw/compressed"
     args.depth_topic = f"/rgbd/{args.camera_name}/aligned_depth_to_color/image_raw/compressedDepth"
-    args.camera_info_topic = f"/rgbd/{args.camera_name}/color/camera_info"
+    args.camera_info_topic = f"/rgbd/{args.camera_name}/aligned_depth_to_color/camera_info"
     args.pose_frame_id = f"{args.camera_name}_depth_optical_frame"
     
     main(args)
