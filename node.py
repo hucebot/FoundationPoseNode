@@ -201,11 +201,11 @@ def decode_compressed_depth(msg: CompressedImage, scale: float = 0.001) -> np.nd
 
     return depth_img * scale
 
-def symmetry_tfs_from_yaw_angles(yaw_angles):
+def symmetry_tfs_from_z_angles(z_angles):
     symmetry_tfs = []
-    for yaw_angle in yaw_angles:
+    for z_angle in z_angles:
         # Pure Z rotation for Z-up meshes
-        r = Rotation.from_euler("z", yaw_angle, degrees=True)
+        r = Rotation.from_euler("z", z_angle, degrees=True)
         tf = np.eye(4)
         tf[:3, :3] = r.as_matrix()
         symmetry_tfs.append(tf)
@@ -285,82 +285,82 @@ def apply_rotate_z_in(R: np.ndarray, rotate_z_in: Optional[Sequence[float]]) -> 
     raise ValueError(f"rotate_z_in must be [0], [0, period], or empty/None; got {rotate_z_in!r}")
 
 # OBJECT_KEYS_TO_PARAMETERS = {
-#     # "mustard": {"mesh_file": "./assets/hackathon2/mustard/mustard.obj", "symmetry_yaw_angles": "0,180", "target_object": "yellow bottle", "rotate_z_in":[0,180]},
-#     # "juice": {"mesh_file": "./assets/hackathon2/juice/juice.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "bottle", "rotate_z_in":[0,90]},
-#     # "milk": {"mesh_file": "./assets/hackathon2/milk/milk.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "white bottle", "rotate_z_in": [0]},
-#     # "plate": {"mesh_file": "./assets/hackathon2/plate/plate.obj", "symmetry_yaw_angles": "0,90,180,270", "target_object": "red plate", "rotate_z_in": [0]},
-#     # "gavottes": {"mesh_file": "./assets/hackathon2/gavottes/gavottes.obj", "symmetry_yaw_angles": "0,180", "target_object": "biscuit box", "rotate_z_in": [0,180]},
-#     # "bowl": {"mesh_file": "./assets/hackathon2/bowl/bowl.obj", "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "green bowl", "rotate_z_in": [0]},
+#     # "mustard": {"mesh_file": "./assets/hackathon2/mustard/mustard.obj", "symmetry_z_angles": "0,180", "target_object": "yellow bottle", "rotate_z_in":[0,180]},
+#     # "juice": {"mesh_file": "./assets/hackathon2/juice/juice.obj", "symmetry_z_angles": "0,90,180,270", "target_object": "bottle", "rotate_z_in":[0,90]},
+#     # "milk": {"mesh_file": "./assets/hackathon2/milk/milk.obj", "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "white bottle", "rotate_z_in": [0]},
+#     # "plate": {"mesh_file": "./assets/hackathon2/plate/plate.obj", "symmetry_z_angles": "0,90,180,270", "target_object": "red plate", "rotate_z_in": [0]},
+#     # "gavottes": {"mesh_file": "./assets/hackathon2/gavottes/gavottes.obj", "symmetry_z_angles": "0,180", "target_object": "biscuit box", "rotate_z_in": [0,180]},
+#     # "bowl": {"mesh_file": "./assets/hackathon2/bowl/bowl.obj", "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", "target_object": "green bowl", "rotate_z_in": [0]},
 # }
 
 OBJECT_KEYS_TO_PARAMETERS = {
     "baguette" : {"mesh_file": "./assets/hackathon3/baguette/baguette.obj", 
-                  "symmetry_yaw_angles": "", 
+                  "symmetry_z_angles": "", 
                   "target_object": "bread", 
                   "rotate_z_in": None},
     
     "banana" : {"mesh_file": "./assets/hackathon3/banana/banana.obj", 
-                "symmetry_yaw_angles": "", 
+                "symmetry_z_angles": "", 
                 "target_object": "banana", 
                 "rotate_z_in": None},
     
     "coffeecan" : {"mesh_file": "./assets/hackathon3/coffeecan/coffeecan.obj", 
-                   "symmetry_yaw_angles": "", 
+                   "symmetry_z_angles": "", 
                    "target_object": "blue container", 
                    "rotate_z_in": None},
     
     "egg" : {"mesh_file": "./assets/hackathon3/egg/egg.obj", 
-             "symmetry_yaw_angles": "", 
+             "symmetry_z_angles": "", 
              "target_object": "egg", 
              "rotate_z_in": None},
     
     "flowercup" : {"mesh_file": "./assets/hackathon3/flowercup/flowercup.obj", 
-                   "symmetry_yaw_angles": "", 
+                   "symmetry_z_angles": "", 
                    "target_object": "yellow mug", 
                    "rotate_z_in": None},
     
     "jam" : {"mesh_file": "./assets/hackathon3/jam/jam.obj", 
-             "symmetry_yaw_angles": "", 
+             "symmetry_z_angles": "", 
              "target_object": "jam", 
              "rotate_z_in": None},
     
     "milk" : {"mesh_file": "./assets/hackathon3/milk/milk.obj", 
-              "symmetry_yaw_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
+              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
               "target_object": "white bottle", 
               "rotate_z_in": None},
     
     "minicheese" : {"mesh_file": "./assets/hackathon3/minicheese/minicheese.obj", 
-                    "symmetry_yaw_angles": "", 
+                    "symmetry_z_angles": "", 
                     "target_object": "cheese", 
                     "rotate_z_in": None},
     
     "pan" : {"mesh_file": "./assets/hackathon3/pan/pan.obj", 
-             "symmetry_yaw_angles": "", 
+             "symmetry_z_angles": "", 
              "target_object": "pan", 
              "rotate_z_in": None},
     
     "redapple" : {"mesh_file": "./assets/hackathon3/redapple/redapple.obj", 
-                  "symmetry_yaw_angles": "", 
+                  "symmetry_z_angles": "", 
                   "target_object": "red apple", 
                   "rotate_z_in": None},
     
     "smallmilk" : {"mesh_file": "./assets/hackathon3/smallmilk/smallmilk.obj", 
-                   "symmetry_yaw_angles": "", 
+                   "symmetry_z_angles": "", 
                    "target_object": "white bottle", 
                    "rotate_z_in": None},
     
     "smallsanpellegrino" : {"mesh_file": "./assets/hackathon3/smallsanpellegrino/smallsanpellegrino.obj", 
-                            "symmetry_yaw_angles": "", 
+                            "symmetry_z_angles": "", 
                             "target_object": "green bottle", 
                             "rotate_z_in": None},
     
     "spam" : {"mesh_file": "./assets/hackathon3/spam/spam.obj", 
-              "symmetry_yaw_angles": "", 
+              "symmetry_z_angles": "", 
               "target_object": "blue container", 
               "rotate_z_in": None},
     
     "ycbmustard" : {"mesh_file": "./assets/hackathon3/ycbmustard/ycbmustard.obj", 
-                    "symmetry_yaw_angles": "0,180", 
+                    "symmetry_z_angles": "0,180", 
                     "target_object": "yellow bottle", 
                     "rotate_z_in": [0,180]},
 }
@@ -429,7 +429,7 @@ class FoundationPoseROS2Node(Node):
         self.min_initial_detection_counter = args.min_initial_detection_counter
         self.enable_pose_tracking = args.enable_pose_tracking
         self.seg_model_type = args.seg_model_type
-        self.symmetry_yaw_angles = args.symmetry_yaw_angles
+        self.symmetry_z_angles = args.symmetry_z_angles
         self.fp_verbosity = args.fp_verbosity
         self.use_kalman_filter = args.use_kalman_filter
         if self.fp_verbosity not in ["debug", "info", "warning", "error", "critical"]:
@@ -460,7 +460,7 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Resize factor: {self.resize_factor}")
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
-        self.get_logger().debug(f"Symmetry yaw angles: {self.symmetry_yaw_angles}")
+        self.get_logger().debug(f"Symmetry yaw angles: {self.symmetry_z_angles}")
         self.get_logger().debug(f"Rotate z in: {self.rotate_z_in}")
         self.get_logger().debug(f"Use Kalman filter: {self.use_kalman_filter}")
         
@@ -516,9 +516,9 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().info(f"Segmentation model {self.seg_model_type} ({self.seg_model_name}) initialized")
         
         # Load symmetry transforms
-        if self.symmetry_yaw_angles is not None and self.symmetry_yaw_angles != "":
-            symmetry_yaw_angles = [float(yaw_angle) for yaw_angle in self.symmetry_yaw_angles.split(",")]
-            symmetry_tfs = symmetry_tfs_from_yaw_angles(symmetry_yaw_angles)
+        if self.symmetry_z_angles is not None and self.symmetry_z_angles != "":
+            symmetry_z_angles = [float(z_angle) for z_angle in self.symmetry_z_angles.split(",")]
+            symmetry_tfs = symmetry_tfs_from_z_angles(symmetry_z_angles)
             self.get_logger().debug(f"Symmetry transforms: {symmetry_tfs.shape}")
         else:
             symmetry_tfs = None
@@ -682,7 +682,7 @@ class FoundationPoseROS2Node(Node):
             rn = basename.split(".")[0]
             self._marker_mesh_resource = f"file:///mesh_assets/{rn}/{basename}"
             
-            self.symmetry_yaw_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_yaw_angles"]
+            self.symmetry_z_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_z_angles"]
             self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
             self.rotate_z_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("rotate_z_in")
             
@@ -701,9 +701,9 @@ class FoundationPoseROS2Node(Node):
             self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
             
             # Load symmetry transforms
-            if self.symmetry_yaw_angles is not None and self.symmetry_yaw_angles != "":
-                symmetry_yaw_angles = [float(yaw_angle) for yaw_angle in self.symmetry_yaw_angles.split(",")]
-                symmetry_tfs = symmetry_tfs_from_yaw_angles(symmetry_yaw_angles)
+            if self.symmetry_z_angles is not None and self.symmetry_z_angles != "":
+                symmetry_z_angles = [float(z_angle) for z_angle in self.symmetry_z_angles.split(",")]
+                symmetry_tfs = symmetry_tfs_from_z_angles(symmetry_z_angles)
                 self.get_logger().debug(f"Symmetry transforms: {symmetry_tfs.shape}")
             else:
                 symmetry_tfs = None
@@ -1075,7 +1075,7 @@ if __name__ == "__main__":
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
-    parser.add_argument("--symmetry_yaw_angles", "-sya", type=str, default=None, help="Symmetry yaw angles. Format: 'yaw1,yaw2,yaw3,...'. Empty = no symmetry transforms.")
+    parser.add_argument("--symmetry_z_angles", "-sya", type=str, default=None, help="Symmetry yaw angles. Format: 'yaw1,yaw2,yaw3,...'. Empty = no symmetry transforms.")
     parser.add_argument("--fp_verbosity", "-v", type=str, default="info", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     args = parser.parse_args()
     
