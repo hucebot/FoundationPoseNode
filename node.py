@@ -281,6 +281,72 @@ def _orthonormal_basis_from_z(z_axis: np.ndarray) -> np.ndarray:
     return np.stack([x_axis, y_axis, z], axis=1)
 
 
+def _orthonormal_basis_from_x(x_axis: np.ndarray) -> np.ndarray:
+    """
+    Right-handed rotation matrix [x, y, z] with given x column (object x in camera frame).
+
+    Convention (camera frame): z-forward (depth), x-right, y-down (typical optical frame).
+    - x column is the estimated object x-axis in camera coords.
+    - z column is camera-forward (camera z) projected onto the plane orthogonal to object x.
+    - y column completes the basis: y = z × x; then re-orthogonalize z = x × y.
+    """
+    x = np.asarray(x_axis, dtype=np.float64).reshape(3)
+    x /= np.linalg.norm(x) + 1e-12
+
+    cam_fwd = np.array([0.0, 0.0, 1.0], dtype=np.float64)  # camera Z axis (depth)
+    z_axis = cam_fwd - np.dot(cam_fwd, x) * x  # project forward into plane normal to x
+    nz = np.linalg.norm(z_axis)
+    if nz < 1e-8:
+        # If object x is (near) parallel to camera forward, fall back to camera X then Y.
+        cam_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        z_axis = cam_x - np.dot(cam_x, x) * x
+        nz = np.linalg.norm(z_axis)
+        if nz < 1e-8:
+            cam_y = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            z_axis = cam_y - np.dot(cam_y, x) * x
+            nz = np.linalg.norm(z_axis)
+
+    z_axis /= nz + 1e-12
+    y_axis = np.cross(z_axis, x)
+    y_axis /= np.linalg.norm(y_axis) + 1e-12
+    z_axis = np.cross(x, y_axis)
+    z_axis /= np.linalg.norm(z_axis) + 1e-12
+    return np.stack([x, y_axis, z_axis], axis=1)
+
+
+def _orthonormal_basis_from_y(y_axis: np.ndarray) -> np.ndarray:
+    """
+    Right-handed rotation matrix [x, y, z] with given y column (object y in camera frame).
+
+    Convention (camera frame): z-forward (depth), x-right, y-down (typical optical frame).
+    - y column is the estimated object y-axis in camera coords.
+    - z column is camera-forward (camera z) projected onto the plane orthogonal to object y.
+    - x column completes the basis: x = y × z; then re-orthogonalize z = x × y.
+    """
+    y = np.asarray(y_axis, dtype=np.float64).reshape(3)
+    y /= np.linalg.norm(y) + 1e-12
+
+    cam_fwd = np.array([0.0, 0.0, 1.0], dtype=np.float64)  # camera Z axis (depth)
+    z_axis = cam_fwd - np.dot(cam_fwd, y) * y  # project forward into plane normal to y
+    nz = np.linalg.norm(z_axis)
+    if nz < 1e-8:
+        # If object y is (near) parallel to camera forward, fall back to camera X then Y.
+        cam_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        z_axis = cam_x - np.dot(cam_x, y) * y
+        nz = np.linalg.norm(z_axis)
+        if nz < 1e-8:
+            cam_y = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            z_axis = cam_y - np.dot(cam_y, y) * y
+            nz = np.linalg.norm(z_axis)
+
+    z_axis /= nz + 1e-12
+    x_axis = np.cross(y, z_axis)
+    x_axis /= np.linalg.norm(x_axis) + 1e-12
+    z_axis = np.cross(x_axis, y)
+    z_axis /= np.linalg.norm(z_axis) + 1e-12
+    return np.stack([x_axis, y, z_axis], axis=1)
+
+
 def apply_rotate_z_in(R: np.ndarray, apply_z_in: Optional[Sequence[float]]) -> np.ndarray:
     """
     Keep the estimated object z-axis (column 2 of R); rebuild x,y in the plane orthogonal to z.
@@ -323,6 +389,92 @@ def apply_rotate_z_in(R: np.ndarray, apply_z_in: Optional[Sequence[float]]) -> n
 
     raise ValueError(f"apply_z_in must be [0], [0, period], or empty/None; got {apply_z_in!r}")
 
+
+def apply_rotate_x_in(R: np.ndarray, apply_x_in: Optional[Sequence[float]]) -> np.ndarray:
+    """
+    Keep the estimated object x-axis (column 0 of R); rebuild y,z in the plane orthogonal to x.
+
+    apply_x_in:
+      - None or (): leave R unchanged.
+      - [0]: roll around x fixed to 0 (z aligned with camera-forward as much as possible).
+      - [0, P] with P in {90, 180, ...}: roll angle (deg) reduced with np.mod(psi, P) into [0, P),
+        then R' = R_ref @ Rx(psi_reduced).
+    """
+    if apply_x_in is None:
+        return np.asarray(R, dtype=np.float64).copy()
+    rx = list(apply_x_in)
+    if len(rx) == 0:
+        return np.asarray(R, dtype=np.float64).copy()
+
+    R = np.asarray(R, dtype=np.float64)
+    x_axis = R[:, 0]
+    R_ref = _orthonormal_basis_from_x(x_axis)
+    y_ref, z_ref = R_ref[:, 1], R_ref[:, 2]
+
+    if len(rx) == 1:
+        if float(rx[0]) != 0.0:
+            raise ValueError(f"apply_x_in with one element must be [0], got {apply_x_in!r}")
+        return R_ref
+
+    if len(rx) == 2:
+        lo, hi = float(rx[0]), float(rx[1])
+        if lo != 0.0:
+            raise ValueError(f"apply_x_in two-element form must be [0, period], got {apply_x_in!r}")
+        period = hi
+        if period <= 0:
+            raise ValueError(f"apply_x_in period must be > 0, got {period}")
+        v = R[:, 2]  # current z axis
+        psi_rad = np.arctan2(np.dot(v, y_ref), np.dot(v, z_ref))
+        psi_deg = np.degrees(psi_rad)
+        psi_rem = float(np.mod(psi_deg, period))
+        Rx = Rotation.from_euler("x", psi_rem, degrees=True).as_matrix()
+        return R_ref @ Rx
+
+    raise ValueError(f"apply_x_in must be [0], [0, period], or empty/None; got {apply_x_in!r}")
+
+
+def apply_rotate_y_in(R: np.ndarray, apply_y_in: Optional[Sequence[float]]) -> np.ndarray:
+    """
+    Keep the estimated object y-axis (column 1 of R); rebuild x,z in the plane orthogonal to y.
+
+    apply_y_in:
+      - None or (): leave R unchanged.
+      - [0]: pitch around y fixed to 0 (z aligned with camera-forward as much as possible).
+      - [0, P] with P in {90, 180, ...}: pitch angle (deg) reduced with np.mod(psi, P) into [0, P),
+        then R' = R_ref @ Ry(psi_reduced).
+    """
+    if apply_y_in is None:
+        return np.asarray(R, dtype=np.float64).copy()
+    ry = list(apply_y_in)
+    if len(ry) == 0:
+        return np.asarray(R, dtype=np.float64).copy()
+
+    R = np.asarray(R, dtype=np.float64)
+    y_axis = R[:, 1]
+    R_ref = _orthonormal_basis_from_y(y_axis)
+    x_ref, z_ref = R_ref[:, 0], R_ref[:, 2]
+
+    if len(ry) == 1:
+        if float(ry[0]) != 0.0:
+            raise ValueError(f"apply_y_in with one element must be [0], got {apply_y_in!r}")
+        return R_ref
+
+    if len(ry) == 2:
+        lo, hi = float(ry[0]), float(ry[1])
+        if lo != 0.0:
+            raise ValueError(f"apply_y_in two-element form must be [0, period], got {apply_y_in!r}")
+        period = hi
+        if period <= 0:
+            raise ValueError(f"apply_y_in period must be > 0, got {period}")
+        v = R[:, 2]  # current z axis
+        psi_rad = np.arctan2(np.dot(v, x_ref), np.dot(v, z_ref))
+        psi_deg = np.degrees(psi_rad)
+        psi_rem = float(np.mod(psi_deg, period))
+        Ry = Rotation.from_euler("y", psi_rem, degrees=True).as_matrix()
+        return R_ref @ Ry
+
+    raise ValueError(f"apply_y_in must be [0], [0, period], or empty/None; got {apply_y_in!r}")
+
 # OBJECT_KEYS_TO_PARAMETERS = {
 #     # "mustard": {"mesh_file": "./assets/hackathon2/mustard/mustard.obj", "symmetry_z_angles": "0,180", "target_object": "yellow bottle", "rotate_z_in":[0,180]},
 #     # "juice": {"mesh_file": "./assets/hackathon2/juice/juice.obj", "symmetry_z_angles": "0,90,180,270", "target_object": "bottle", "rotate_z_in":[0,90]},
@@ -333,26 +485,43 @@ def apply_rotate_z_in(R: np.ndarray, apply_z_in: Optional[Sequence[float]]) -> n
 # }
 
 OBJECT_KEYS_TO_PARAMETERS = {
-    # ok
+    # flips on x and y at 180 !
     "baguette" : {"mesh_file": "./assets/hackathon3/baguette/baguette.obj", 
                   "symmetry_x_angles": "0,180", 
                   "symmetry_y_angles": "0,180", 
                   "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
                   "target_object": "bread", 
-                  "apply_z_in": [0]},
+                  "constraint_yaw_in": 0,
+                  "constraint_pitch_in": [0,180],
+                  "constraint_roll_in": [0,180],
+                  "apply_x_in": None,
+                  "apply_y_in": None,
+                  "apply_z_in": None},
     
+    # seems okay and does not flip
     "banana" : {"mesh_file": "./assets/hackathon3/banana/banana.obj", 
                 "symmetry_x_angles": "", 
                 "symmetry_y_angles": "", 
                 "symmetry_z_angles": "", 
-                "target_object": "banana", 
+                "target_object": "banana",
+                "constraint_yaw_in": None,
+                "constraint_pitch_in": None,
+                "constraint_roll_in": None,
+                "apply_x_in": None,
+                "apply_y_in": None,
                 "apply_z_in": None},
     
+    # still flips up and down, adjusted size to retry
     "coffeecan" : {"mesh_file": "./assets/hackathon3/coffeecan/coffeecan.obj", 
                    "symmetry_x_angles": "", 
                    "symmetry_y_angles": "", 
                    "symmetry_z_angles": "", 
                    "target_object": "blue container", 
+                   "constraint_yaw_in": 0,
+                   "constraint_pitch_in": None,
+                   "constraint_roll_in": None,
+                   "apply_x_in": None,
+                   "apply_y_in": None,
                    "apply_z_in": None},
     
     # lots of flipping difficult to stabilize
@@ -361,14 +530,24 @@ OBJECT_KEYS_TO_PARAMETERS = {
              "symmetry_y_angles": "0,180", 
              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
              "target_object": "egg", 
-             "apply_z_in": [0]},
+             "constraint_yaw_in": 0,
+             "constraint_pitch_in": 0,
+             "constraint_roll_in": 0,
+             "apply_x_in": None,
+             "apply_y_in": None,
+             "apply_z_in": None},
     
-    # good it seems that does not flip up/down, could be anchor but a bit small
+    # good it seems that does not flip up/down but the handle does not always get oriented correctly
     "flowercup" : {"mesh_file": "./assets/hackathon3/flowercup/flowercup.obj", 
                    "symmetry_x_angles": "", 
                    "symmetry_y_angles": "", 
                    "symmetry_z_angles": "", 
                    "target_object": "yellow mug", 
+                   "constraint_yaw_in": None,
+                   "constraint_pitch_in": None,
+                   "constraint_roll_in": None,
+                   "apply_x_in": None,
+                   "apply_y_in": None,
                    "apply_z_in": None},
     
     # not detected with keyword jam
@@ -376,7 +555,12 @@ OBJECT_KEYS_TO_PARAMETERS = {
              "symmetry_x_angles": "", 
              "symmetry_y_angles": "", 
              "symmetry_z_angles": "", 
-             "target_object": "jam", 
+             "target_object": "orange jam", 
+             "constraint_yaw_in": None,
+             "constraint_pitch_in": None,
+             "constraint_roll_in": None,
+             "apply_x_in": None,
+             "apply_y_in": None,
              "apply_z_in": None},
     
     # ok
@@ -385,7 +569,12 @@ OBJECT_KEYS_TO_PARAMETERS = {
               "symmetry_y_angles": "", 
               "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
               "target_object": "white bottle", 
-              "apply_z_in": [0]},
+              "constraint_yaw_in": 0,
+              "constraint_pitch_in": None,
+              "constraint_roll_in": None,
+              "apply_x_in": None,
+              "apply_y_in": None,
+              "apply_z_in": None},
     
     # hard to find but seems good when found... investigate, maybe a bigger one !
     "minicheese" : {"mesh_file": "./assets/hackathon3/minicheese/minicheese.obj", 
@@ -393,6 +582,11 @@ OBJECT_KEYS_TO_PARAMETERS = {
                     "symmetry_y_angles": "", 
                     "symmetry_z_angles": "", 
                     "target_object": "triangle cheese", 
+                    "constraint_yaw_in": None,
+                    "constraint_pitch_in": None,
+                    "constraint_roll_in": None,
+                    "apply_x_in": None,
+                    "apply_y_in": None,
                     "apply_z_in": None},
     
     # seems robust could be a good anchor point 
@@ -401,6 +595,11 @@ OBJECT_KEYS_TO_PARAMETERS = {
              "symmetry_y_angles": "", 
              "symmetry_z_angles": "", 
              "target_object": "pan", 
+             "constraint_yaw_in": None,
+             "constraint_pitch_in": None,
+             "constraint_roll_in": None,
+             "apply_x_in": None,
+             "apply_y_in": None,
              "apply_z_in": None},
     
     # problem gets a lot of multiple objects + rotations
@@ -409,36 +608,62 @@ OBJECT_KEYS_TO_PARAMETERS = {
                   "symmetry_y_angles": "0,180", 
                   "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
                   "target_object": "red apple", 
-                  "apply_z_in": [0]},
+                  "constraint_yaw_in": 0,
+                  "constraint_pitch_in": 0,
+                  "constraint_roll_in": 0,
+                  "apply_x_in": None,
+                  "apply_y_in": None,
+                  "apply_z_in": None},
     
     "smallmilk" : {"mesh_file": "./assets/hackathon3/smallmilk/smallmilk.obj", 
                    "symmetry_x_angles": "", 
                    "symmetry_y_angles": "", 
                    "symmetry_z_angles": "", 
                    "target_object": "white bottle", 
+                   "constraint_yaw_in": 0,
+                   "constraint_pitch_in": None,
+                   "constraint_roll_in": None,
+                   "apply_x_in": None,
+                   "apply_y_in": None,
                    "apply_z_in": None},
     
     "smallsanpellegrino" : {"mesh_file": "./assets/hackathon3/smallsanpellegrino/smallsanpellegrino.obj", 
                             "symmetry_x_angles": "", 
                             "symmetry_y_angles": "", 
-                            "symmetry_z_angles": "", 
+                            "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
                             "target_object": "green bottle", 
+                            "constraint_yaw_in": 0,
+                            "constraint_pitch_in": None,
+                            "constraint_roll_in": None,
+                            "apply_x_in": None,
+                            "apply_y_in": None,
                             "apply_z_in": None},
     
-    # hard to detect, flips on several axes
+    # hard to detect and flips on several axes
     "spam" : {"mesh_file": "./assets/hackathon3/spam/spam.obj", 
               "symmetry_x_angles": "", 
               "symmetry_y_angles": "", 
               "symmetry_z_angles": "", 
               "target_object": "blue container", 
+              "constraint_yaw_in": [0,180],
+              "constraint_pitch_in": [0,180],
+              "constraint_roll_in": [0,180],
+              "apply_x_in": None,
+              "apply_y_in": None,
               "apply_z_in": None},
     
+    # okay but flips on one axis
     "ycbmustard" : {"mesh_file": "./assets/hackathon3/ycbmustard/ycbmustard.obj", 
                     "symmetry_x_angles": "", 
                     "symmetry_y_angles": "", 
-                    "symmetry_z_angles": "0,180", 
+                    "symmetry_z_angles": "", 
                     "target_object": "yellow bottle", 
-                    "apply_z_in": [0,180]},
+                    "constraint_yaw_in": [0,180],
+                    "constraint_pitch_in": None,
+                    "constraint_roll_in": None,
+                    "apply_x_in": None,
+                    "apply_y_in": None,
+                    "apply_z_in": None},
 }
 
 class FoundationPoseROS2Node(Node):
@@ -479,14 +704,18 @@ class FoundationPoseROS2Node(Node):
         self.apply_z_in: Optional[Sequence[float]] = None
         self.apply_x_in: Optional[Sequence[float]] = None
         self.apply_y_in: Optional[Sequence[float]] = None
+        self.constraint_yaw_in = None
+        self.constraint_pitch_in = None
+        self.constraint_roll_in = None
         for params in OBJECT_KEYS_TO_PARAMETERS.values():
             if mesh_file_basename in params["mesh_file"]:
                 self.apply_z_in = params.get("apply_z_in")
                 self.apply_x_in = params.get("apply_x_in")
                 self.apply_y_in = params.get("apply_y_in")
+                self.constraint_yaw_in = params.get("constraint_yaw_in")
+                self.constraint_pitch_in = params.get("constraint_pitch_in")
+                self.constraint_roll_in = params.get("constraint_roll_in")
                 print(f"Apply z in: {self.apply_z_in}")
-                print(f"Apply x in: {self.apply_x_in}")
-                print(f"Apply y in: {self.apply_y_in}")
                 break
         
 
@@ -548,9 +777,12 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Symmetry x angles: {self.symmetry_x_angles}")
         self.get_logger().debug(f"Symmetry y angles: {self.symmetry_y_angles}")
         self.get_logger().debug(f"Symmetry z angles: {self.symmetry_z_angles}")
+        self.get_logger().debug(f"Apply z in: {self.apply_z_in}")
         self.get_logger().debug(f"Apply x in: {self.apply_x_in}")
         self.get_logger().debug(f"Apply y in: {self.apply_y_in}")
-        self.get_logger().debug(f"Apply z in: {self.apply_z_in}")
+        self.get_logger().debug(f"Constraint yaw in: {self.constraint_yaw_in}")
+        self.get_logger().debug(f"Constraint pitch in: {self.constraint_pitch_in}")
+        self.get_logger().debug(f"Constraint roll in: {self.constraint_roll_in}")
         self.get_logger().debug(f"Use Kalman filter: {self.use_kalman_filter}")
         
         self.K = None # to be set by camera info callback
@@ -777,6 +1009,11 @@ class FoundationPoseROS2Node(Node):
             self.symmetry_z_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_z_angles"]
             self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
             self.apply_z_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("apply_z_in")
+            self.apply_x_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("apply_x_in")
+            self.apply_y_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("apply_y_in")
+            self.constraint_yaw_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_yaw_in")
+            self.constraint_pitch_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_pitch_in")
+            self.constraint_roll_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_roll_in")
             
             del self.est.scorer # delete the old score predictor
             del self.est.refiner # delete the old score and refine predictors
@@ -1067,15 +1304,81 @@ class FoundationPoseROS2Node(Node):
             # Convert pose to object coordinates
             R_cam = center_pose[:3, :3]
             t_cam = center_pose[:3, 3]
+
+            
             R_cam = apply_rotate_z_in(R_cam, self.apply_z_in)
+            R_cam = apply_rotate_y_in(R_cam, self.apply_y_in)
+            R_cam = apply_rotate_x_in(R_cam, self.apply_x_in)
+
+            # Optional constraints directly on yaw/pitch/roll at R_cam level (zxy convention)
+            r_cam = Rotation.from_matrix(R_cam)
+            yaw_cam, pitch_cam, roll_cam = r_cam.as_euler('zxy', degrees=True)
+
+            if self.constraint_yaw_in == 0 and self.constraint_pitch_in == 0 and self.constraint_roll_in == 0:
+                # force yaw, pitch, roll to 0
+                R_cam = np.eye(3)
+                r_cam = Rotation.from_matrix(R_cam)
+                yaw_cam, pitch_cam, roll_cam = r_cam.as_euler('zxy', degrees=True)
+            else:
+                # roll
+                if self.constraint_roll_in is not None:
+                    if isinstance(self.constraint_roll_in, (int, float)) and float(self.constraint_roll_in) == 0.0:
+                        target_roll = 0.0
+                    else:
+                        lo = float(self.constraint_roll_in[0])
+                        hi = float(self.constraint_roll_in[1])
+                        width = hi - lo
+                        if width <= 0:
+                            raise ValueError(f"constraint_roll_in must be a valid range [lo, hi] with hi>lo, got {self.constraint_roll_in!r}")
+                        roll_360 = float(np.mod(roll_cam, 360.0))
+                        target_roll = float(np.mod(roll_360 - lo, width) + lo)
+                    delta_roll = target_roll - roll_cam
+                    R_cancel_roll = Rotation.from_euler('y', delta_roll, degrees=True).as_matrix()
+                    R_cam = R_cam @ R_cancel_roll
+                    r_cam = Rotation.from_matrix(R_cam)
+                    yaw_cam, pitch_cam, roll_cam = r_cam.as_euler('zxy', degrees=True)
+
+                # pitch
+                if self.constraint_pitch_in is not None:
+                    if isinstance(self.constraint_pitch_in, (int, float)) and float(self.constraint_pitch_in) == 0.0:
+                        target_pitch = 0.0
+                    else:
+                        lo = float(self.constraint_pitch_in[0])
+                        hi = float(self.constraint_pitch_in[1])
+                        width = hi - lo
+                        if width <= 0:
+                            raise ValueError(f"constraint_pitch_in must be a valid range [lo, hi] with hi>lo, got {self.constraint_pitch_in!r}")
+                        pitch_360 = float(np.mod(pitch_cam, 360.0))
+                        target_pitch = float(np.mod(pitch_360 - lo, width) + lo)
+                    delta_pitch = target_pitch - pitch_cam
+                    R_cancel_pitch = Rotation.from_euler('x', delta_pitch, degrees=True).as_matrix()
+                    R_cam = R_cam @ R_cancel_pitch
+                    r_cam = Rotation.from_matrix(R_cam)
+                    yaw_cam, pitch_cam, roll_cam = r_cam.as_euler('zxy', degrees=True)
+
+                # yaw
+                if self.constraint_yaw_in is not None:
+                    if isinstance(self.constraint_yaw_in, (int, float)) and float(self.constraint_yaw_in) == 0.0:
+                        target_yaw = 0.0
+                    else:
+                        lo = float(self.constraint_yaw_in[0])
+                        hi = float(self.constraint_yaw_in[1])
+                        width = hi - lo
+                        if width <= 0:
+                            raise ValueError(f"constraint_yaw_in must be a valid range [lo, hi] with hi>lo, got {self.constraint_yaw_in!r}")
+                        yaw_360 = float(np.mod(yaw_cam, 360.0))
+                        target_yaw = float(np.mod(yaw_360 - lo, width) + lo)
+                    delta_yaw = target_yaw - yaw_cam
+                    R_cancel_yaw = Rotation.from_euler('z', delta_yaw, degrees=True).as_matrix()
+                    R_cam = R_cam @ R_cancel_yaw
+                    r_cam = Rotation.from_matrix(R_cam)
+                    yaw_cam, pitch_cam, roll_cam = r_cam.as_euler('zxy', degrees=True)
 
             pose_msg = PoseStamped()
             pose_msg.header.stamp = color_msg.header.stamp
             pose_msg.header.frame_id = self.pose_frame_id
 
-            r_cam = Rotation.from_matrix(R_cam)
-            euler_cam = r_cam.as_euler('zxy', degrees=True)
-            yaw_cam, pitch_cam, roll_cam = euler_cam
+            euler_cam = np.array([yaw_cam, pitch_cam, roll_cam], dtype=np.float64)
             self.get_logger().info(f"Pose: t = {t_cam}")
             self.get_logger().info(f"R = {R_cam}")
             self.get_logger().info(f"euler = {euler_cam}")
