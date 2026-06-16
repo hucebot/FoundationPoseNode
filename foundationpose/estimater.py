@@ -18,7 +18,8 @@ import yaml
 
 
 class FoundationPose:
-  def __init__(self, model_pts, model_normals, symmetry_tfs=None, mesh=None, scorer:ScorePredictor=None, refiner:PoseRefinePredictor=None, glctx=None, debug=0, debug_dir='/home/bowen/debug/novel_pose_debug/'):
+  def __init__(self, model_pts, model_normals, symmetry_tfs=None, mesh=None, scorer:ScorePredictor=None, refiner:PoseRefinePredictor=None, glctx=None, debug=0, 
+               debug_dir='/home/bowen/debug/novel_pose_debug/', meshname=None):
     self.gt_pose = None
     self.ignore_normal_flip = True
     self.debug = debug
@@ -31,10 +32,19 @@ class FoundationPose:
       min_n_view = int(len(symmetry_tfs)/2)*40
       inplane_step = max(15, int(60 / (len(symmetry_tfs) / 2)))
       logging.info(f"min_n_view:{min_n_view}, inplane_step:{inplane_step} (len(symmetry_tfs):{len(symmetry_tfs)})")
-      # allow more if there are symmetry transforms
-      self.make_rotation_grid(min_n_views=min_n_view, inplane_step=inplane_step)
     else:
-      self.make_rotation_grid(min_n_views=40, inplane_step=60)
+      min_n_view = 40
+      inplane_step = 60
+
+    rot_grid_path = os.path.join(os.getcwd(), f'{meshname}_rot_grid.npy') if meshname else None
+    if rot_grid_path and os.path.isfile(rot_grid_path):
+      self.rot_grid = torch.as_tensor(np.load(rot_grid_path), device='cuda', dtype=torch.float)
+      print(f'Loaded rot_grid from {rot_grid_path}: {self.rot_grid.shape}')
+    else:
+      self.make_rotation_grid(min_n_views=min_n_view, inplane_step=inplane_step)
+      if rot_grid_path:
+        np.save(rot_grid_path, self.rot_grid.cpu().numpy())
+        logging.info(f'Saved rot_grid to {rot_grid_path}')
 
     self.glctx = glctx
 

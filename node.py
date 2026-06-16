@@ -211,6 +211,45 @@ def symmetry_tfs_from_z_angles(z_angles):
         symmetry_tfs.append(tf)
     return np.array(symmetry_tfs)
 
+
+def _parse_angles_str(angles_str):
+    """Parse a 'a1,a2,...' string of degrees into a list of floats, or None if empty."""
+    if angles_str is None or angles_str == "":
+        return None
+    return [float(a) for a in angles_str.split(",")]
+
+
+def symmetry_tfs_from_angles(x_angles_str=None, y_angles_str=None, z_angles_str=None):
+    """
+    Build the set of 4x4 symmetry transforms from per-axis angle strings (degrees).
+
+    Each argument is a comma-separated string like "0,90,180,270" (or "" / None for no
+    symmetry on that axis). The returned set is the Cartesian product of the per-axis
+    rotations, composed as R = Rz @ Ry @ Rx (scipy "xyz" intrinsic order). When only
+    z-angles are given this reproduces the previous pure-Z behavior.
+
+    Returns None if no symmetry is requested on any axis.
+    """
+    xa = _parse_angles_str(x_angles_str)
+    ya = _parse_angles_str(y_angles_str)
+    za = _parse_angles_str(z_angles_str)
+    if xa is None and ya is None and za is None:
+        return None
+
+    xs = xa if xa is not None else [0.0]
+    ys = ya if ya is not None else [0.0]
+    zs = za if za is not None else [0.0]
+
+    symmetry_tfs = []
+    for x_angle in xs:
+        for y_angle in ys:
+            for z_angle in zs:
+                r = Rotation.from_euler("xyz", [x_angle, y_angle, z_angle], degrees=True)
+                tf = np.eye(4)
+                tf[:3, :3] = r.as_matrix()
+                symmetry_tfs.append(tf)
+    return np.array(symmetry_tfs)
+
 def _orthonormal_basis_from_z(z_axis: np.ndarray) -> np.ndarray:
     """
     Right-handed rotation matrix [x, y, z] with given z column (object z in camera frame).
@@ -242,19 +281,19 @@ def _orthonormal_basis_from_z(z_axis: np.ndarray) -> np.ndarray:
     return np.stack([x_axis, y_axis, z], axis=1)
 
 
-def apply_rotate_z_in(R: np.ndarray, rotate_z_in: Optional[Sequence[float]]) -> np.ndarray:
+def apply_rotate_z_in(R: np.ndarray, apply_z_in: Optional[Sequence[float]]) -> np.ndarray:
     """
     Keep the estimated object z-axis (column 2 of R); rebuild x,y in the plane orthogonal to z.
 
-    rotate_z_in:
+    apply_z_in:
       - None or (): leave R unchanged.
       - [0]: yaw around z fixed to 0 (x aligned with camera-forward as much as possible).
       - [0, P] with P in {90, 180, ...}: yaw angle (deg) reduced with np.mod(psi, P) into [0, P),
         e.g. P=90 → 115° → 25°; then R' = R_ref @ Rz(psi_reduced).
     """
-    if rotate_z_in is None:
+    if apply_z_in is None:
         return np.asarray(R, dtype=np.float64).copy()
-    rz = list(rotate_z_in)
+    rz = list(apply_z_in)
     if len(rz) == 0:
         return np.asarray(R, dtype=np.float64).copy()
 
@@ -265,16 +304,16 @@ def apply_rotate_z_in(R: np.ndarray, rotate_z_in: Optional[Sequence[float]]) -> 
 
     if len(rz) == 1:
         if float(rz[0]) != 0.0:
-            raise ValueError(f"rotate_z_in with one element must be [0], got {rotate_z_in!r}")
+            raise ValueError(f"apply_z_in with one element must be [0], got {apply_z_in!r}")
         return R_ref
 
     if len(rz) == 2:
         lo, hi = float(rz[0]), float(rz[1])
         if lo != 0.0:
-            raise ValueError(f"rotate_z_in two-element form must be [0, period], got {rotate_z_in!r}")
+            raise ValueError(f"apply_z_in two-element form must be [0, period], got {apply_z_in!r}")
         period = hi
         if period <= 0:
-            raise ValueError(f"rotate_z_in period must be > 0, got {period}")
+            raise ValueError(f"apply_z_in period must be > 0, got {period}")
         v = R[:, 0]
         psi_rad = np.arctan2(np.dot(v, y_ref), np.dot(v, x_ref))
         psi_deg = np.degrees(psi_rad)
@@ -282,7 +321,7 @@ def apply_rotate_z_in(R: np.ndarray, rotate_z_in: Optional[Sequence[float]]) -> 
         Rz = Rotation.from_euler("z", psi_rem, degrees=True).as_matrix()
         return R_ref @ Rz
 
-    raise ValueError(f"rotate_z_in must be [0], [0, period], or empty/None; got {rotate_z_in!r}")
+    raise ValueError(f"apply_z_in must be [0], [0, period], or empty/None; got {apply_z_in!r}")
 
 # OBJECT_KEYS_TO_PARAMETERS = {
 #     # "mustard": {"mesh_file": "./assets/hackathon2/mustard/mustard.obj", "symmetry_z_angles": "0,180", "target_object": "yellow bottle", "rotate_z_in":[0,180]},
@@ -294,75 +333,112 @@ def apply_rotate_z_in(R: np.ndarray, rotate_z_in: Optional[Sequence[float]]) -> 
 # }
 
 OBJECT_KEYS_TO_PARAMETERS = {
+    # ok
     "baguette" : {"mesh_file": "./assets/hackathon3/baguette/baguette.obj", 
-                  "symmetry_z_angles": "", 
+                  "symmetry_x_angles": "0,180", 
+                  "symmetry_y_angles": "0,180", 
+                  "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
                   "target_object": "bread", 
-                  "rotate_z_in": None},
+                  "apply_z_in": [0]},
     
     "banana" : {"mesh_file": "./assets/hackathon3/banana/banana.obj", 
+                "symmetry_x_angles": "", 
+                "symmetry_y_angles": "", 
                 "symmetry_z_angles": "", 
                 "target_object": "banana", 
-                "rotate_z_in": None},
+                "apply_z_in": None},
     
     "coffeecan" : {"mesh_file": "./assets/hackathon3/coffeecan/coffeecan.obj", 
+                   "symmetry_x_angles": "", 
+                   "symmetry_y_angles": "", 
                    "symmetry_z_angles": "", 
                    "target_object": "blue container", 
-                   "rotate_z_in": None},
+                   "apply_z_in": None},
     
+    # lots of flipping difficult to stabilize
     "egg" : {"mesh_file": "./assets/hackathon3/egg/egg.obj", 
-             "symmetry_z_angles": "", 
+             "symmetry_x_angles": "0,180", 
+             "symmetry_y_angles": "0,180", 
+             "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
              "target_object": "egg", 
-             "rotate_z_in": None},
+             "apply_z_in": [0]},
     
+    # good it seems that does not flip up/down, could be anchor but a bit small
     "flowercup" : {"mesh_file": "./assets/hackathon3/flowercup/flowercup.obj", 
+                   "symmetry_x_angles": "", 
+                   "symmetry_y_angles": "", 
                    "symmetry_z_angles": "", 
                    "target_object": "yellow mug", 
-                   "rotate_z_in": None},
+                   "apply_z_in": None},
     
+    # not detected with keyword jam
     "jam" : {"mesh_file": "./assets/hackathon3/jam/jam.obj", 
+             "symmetry_x_angles": "", 
+             "symmetry_y_angles": "", 
              "symmetry_z_angles": "", 
              "target_object": "jam", 
-             "rotate_z_in": None},
+             "apply_z_in": None},
     
+    # ok
     "milk" : {"mesh_file": "./assets/hackathon3/milk/milk.obj", 
+              "symmetry_x_angles": "", 
+              "symmetry_y_angles": "", 
               "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
               "target_object": "white bottle", 
-              "rotate_z_in": None},
+              "apply_z_in": [0]},
     
+    # hard to find but seems good when found... investigate, maybe a bigger one !
     "minicheese" : {"mesh_file": "./assets/hackathon3/minicheese/minicheese.obj", 
+                    "symmetry_x_angles": "", 
+                    "symmetry_y_angles": "", 
                     "symmetry_z_angles": "", 
-                    "target_object": "cheese", 
-                    "rotate_z_in": None},
+                    "target_object": "triangle cheese", 
+                    "apply_z_in": None},
     
+    # seems robust could be a good anchor point 
     "pan" : {"mesh_file": "./assets/hackathon3/pan/pan.obj", 
+             "symmetry_x_angles": "", 
+             "symmetry_y_angles": "", 
              "symmetry_z_angles": "", 
              "target_object": "pan", 
-             "rotate_z_in": None},
+             "apply_z_in": None},
     
+    # problem gets a lot of multiple objects + rotations
     "redapple" : {"mesh_file": "./assets/hackathon3/redapple/redapple.obj", 
-                  "symmetry_z_angles": "", 
+                  "symmetry_x_angles": "0,180", 
+                  "symmetry_y_angles": "0,180", 
+                  "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
                   "target_object": "red apple", 
-                  "rotate_z_in": None},
+                  "apply_z_in": [0]},
     
     "smallmilk" : {"mesh_file": "./assets/hackathon3/smallmilk/smallmilk.obj", 
+                   "symmetry_x_angles": "", 
+                   "symmetry_y_angles": "", 
                    "symmetry_z_angles": "", 
                    "target_object": "white bottle", 
-                   "rotate_z_in": None},
+                   "apply_z_in": None},
     
     "smallsanpellegrino" : {"mesh_file": "./assets/hackathon3/smallsanpellegrino/smallsanpellegrino.obj", 
+                            "symmetry_x_angles": "", 
+                            "symmetry_y_angles": "", 
                             "symmetry_z_angles": "", 
                             "target_object": "green bottle", 
-                            "rotate_z_in": None},
+                            "apply_z_in": None},
     
+    # hard to detect, flips on several axes
     "spam" : {"mesh_file": "./assets/hackathon3/spam/spam.obj", 
+              "symmetry_x_angles": "", 
+              "symmetry_y_angles": "", 
               "symmetry_z_angles": "", 
               "target_object": "blue container", 
-              "rotate_z_in": None},
+              "apply_z_in": None},
     
     "ycbmustard" : {"mesh_file": "./assets/hackathon3/ycbmustard/ycbmustard.obj", 
+                    "symmetry_x_angles": "", 
+                    "symmetry_y_angles": "", 
                     "symmetry_z_angles": "0,180", 
                     "target_object": "yellow bottle", 
-                    "rotate_z_in": [0,180]},
+                    "apply_z_in": [0,180]},
 }
 
 class FoundationPoseROS2Node(Node):
@@ -400,10 +476,17 @@ class FoundationPoseROS2Node(Node):
         self._marker_mesh_resource = f"file:///mesh_assets/{mesh_file_rn}/{mesh_file_basename}"
 
         _abs_mesh = os.path.normpath(os.path.abspath(self.mesh_file))
-        self.rotate_z_in: Optional[Sequence[float]] = None
+        self.apply_z_in: Optional[Sequence[float]] = None
+        self.apply_x_in: Optional[Sequence[float]] = None
+        self.apply_y_in: Optional[Sequence[float]] = None
         for params in OBJECT_KEYS_TO_PARAMETERS.values():
-            if os.path.normpath(os.path.abspath(params["mesh_file"])) == _abs_mesh:
-                self.rotate_z_in = params.get("rotate_z_in")
+            if mesh_file_basename in params["mesh_file"]:
+                self.apply_z_in = params.get("apply_z_in")
+                self.apply_x_in = params.get("apply_x_in")
+                self.apply_y_in = params.get("apply_y_in")
+                print(f"Apply z in: {self.apply_z_in}")
+                print(f"Apply x in: {self.apply_x_in}")
+                print(f"Apply y in: {self.apply_y_in}")
                 break
         
 
@@ -429,6 +512,8 @@ class FoundationPoseROS2Node(Node):
         self.min_initial_detection_counter = args.min_initial_detection_counter
         self.enable_pose_tracking = args.enable_pose_tracking
         self.seg_model_type = args.seg_model_type
+        self.symmetry_x_angles = args.symmetry_x_angles
+        self.symmetry_y_angles = args.symmetry_y_angles
         self.symmetry_z_angles = args.symmetry_z_angles
         self.fp_verbosity = args.fp_verbosity
         self.use_kalman_filter = args.use_kalman_filter
@@ -460,8 +545,12 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Resize factor: {self.resize_factor}")
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
-        self.get_logger().debug(f"Symmetry yaw angles: {self.symmetry_z_angles}")
-        self.get_logger().debug(f"Rotate z in: {self.rotate_z_in}")
+        self.get_logger().debug(f"Symmetry x angles: {self.symmetry_x_angles}")
+        self.get_logger().debug(f"Symmetry y angles: {self.symmetry_y_angles}")
+        self.get_logger().debug(f"Symmetry z angles: {self.symmetry_z_angles}")
+        self.get_logger().debug(f"Apply x in: {self.apply_x_in}")
+        self.get_logger().debug(f"Apply y in: {self.apply_y_in}")
+        self.get_logger().debug(f"Apply z in: {self.apply_z_in}")
         self.get_logger().debug(f"Use Kalman filter: {self.use_kalman_filter}")
         
         self.K = None # to be set by camera info callback
@@ -515,13 +604,13 @@ class FoundationPoseROS2Node(Node):
             raise ValueError(f"Invalid segmentation model type: {self.seg_model_type}")
         self.get_logger().info(f"Segmentation model {self.seg_model_type} ({self.seg_model_name}) initialized")
         
-        # Load symmetry transforms
-        if self.symmetry_z_angles is not None and self.symmetry_z_angles != "":
-            symmetry_z_angles = [float(z_angle) for z_angle in self.symmetry_z_angles.split(",")]
-            symmetry_tfs = symmetry_tfs_from_z_angles(symmetry_z_angles)
+        # Load symmetry transforms (combined over x, y, z axes)
+        symmetry_tfs = symmetry_tfs_from_angles(
+            self.symmetry_x_angles, self.symmetry_y_angles, self.symmetry_z_angles
+        )
+        if symmetry_tfs is not None:
             self.get_logger().debug(f"Symmetry transforms: {symmetry_tfs.shape}")
         else:
-            symmetry_tfs = None
             self.get_logger().debug(f"No symmetry transforms")
         
         # Initialize estimator
@@ -539,6 +628,7 @@ class FoundationPoseROS2Node(Node):
             debug=self.debug,
             glctx=glctx,
             symmetry_tfs=symmetry_tfs,
+            meshname=mesh_file_rn,
         )
         self.get_logger().info("FoundationPose estimator initialized")
         
@@ -682,9 +772,11 @@ class FoundationPoseROS2Node(Node):
             rn = basename.split(".")[0]
             self._marker_mesh_resource = f"file:///mesh_assets/{rn}/{basename}"
             
+            self.symmetry_x_angles = OBJECT_KEYS_TO_PARAMETERS[key_name].get("symmetry_x_angles", "")
+            self.symmetry_y_angles = OBJECT_KEYS_TO_PARAMETERS[key_name].get("symmetry_y_angles", "")
             self.symmetry_z_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_z_angles"]
             self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
-            self.rotate_z_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("rotate_z_in")
+            self.apply_z_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("apply_z_in")
             
             del self.est.scorer # delete the old score predictor
             del self.est.refiner # delete the old score and refine predictors
@@ -700,13 +792,13 @@ class FoundationPoseROS2Node(Node):
             self.bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
             self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
             
-            # Load symmetry transforms
-            if self.symmetry_z_angles is not None and self.symmetry_z_angles != "":
-                symmetry_z_angles = [float(z_angle) for z_angle in self.symmetry_z_angles.split(",")]
-                symmetry_tfs = symmetry_tfs_from_z_angles(symmetry_z_angles)
+            # Load symmetry transforms (combined over x, y, z axes)
+            symmetry_tfs = symmetry_tfs_from_angles(
+                self.symmetry_x_angles, self.symmetry_y_angles, self.symmetry_z_angles
+            )
+            if symmetry_tfs is not None:
                 self.get_logger().debug(f"Symmetry transforms: {symmetry_tfs.shape}")
             else:
-                symmetry_tfs = None
                 self.get_logger().debug(f"No symmetry transforms")
 
             # Initialize estimator
@@ -724,6 +816,7 @@ class FoundationPoseROS2Node(Node):
                 debug=self.debug,
                 glctx=glctx,
                 symmetry_tfs=symmetry_tfs,
+                meshname=rn,
             )
             self.get_logger().info("FoundationPose estimator re-initialized")
             
@@ -974,7 +1067,7 @@ class FoundationPoseROS2Node(Node):
             # Convert pose to object coordinates
             R_cam = center_pose[:3, :3]
             t_cam = center_pose[:3, 3]
-            R_cam = apply_rotate_z_in(R_cam, self.rotate_z_in)
+            R_cam = apply_rotate_z_in(R_cam, self.apply_z_in)
 
             pose_msg = PoseStamped()
             pose_msg.header.stamp = color_msg.header.stamp
@@ -1075,7 +1168,9 @@ if __name__ == "__main__":
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
-    parser.add_argument("--symmetry_z_angles", "-sya", type=str, default=None, help="Symmetry yaw angles. Format: 'yaw1,yaw2,yaw3,...'. Empty = no symmetry transforms.")
+    parser.add_argument("--symmetry_x_angles", "-sxa", type=str, default=None, help="Symmetry roll angles (about x). Format: 'a1,a2,a3,...'. Empty/None = no x symmetry transforms.")
+    parser.add_argument("--symmetry_y_angles", "-sya", type=str, default=None, help="Symmetry pitch angles (about y). Format: 'a1,a2,a3,...'. Empty/None = no y symmetry transforms.")
+    parser.add_argument("--symmetry_z_angles", "-sza", type=str, default=None, help="Symmetry yaw angles (about z). Format: 'yaw1,yaw2,yaw3,...'. Empty = no z symmetry transforms.")
     parser.add_argument("--fp_verbosity", "-v", type=str, default="info", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     args = parser.parse_args()
     
