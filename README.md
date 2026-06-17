@@ -79,6 +79,24 @@ To switch objects :
 ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'mesh_update_mustard\' --once
 ```
 
+Object names (update the switch objects string according to your need) : 
+```
+baguette
+banana
+coffeecan
+egg
+flowercup
+jam
+milk
+minicheese
+pan
+redapple
+smallmilk
+smallsanpellegrino
+spam
+ycbmustard
+```
+
 To switch the target object (but keep the same mesh)
 ```
 ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'yellow\ bottle\' --once

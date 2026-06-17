@@ -618,7 +618,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
     "smallmilk" : {"mesh_file": "./assets/hackathon3/smallmilk/smallmilk.obj", 
                    "symmetry_x_angles": "", 
                    "symmetry_y_angles": "", 
-                   "symmetry_z_angles": "", 
+                   "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
                    "target_object": "white bottle", 
                    "constraint_yaw_in": 0,
                    "constraint_pitch_in": None,
