@@ -59,17 +59,9 @@ docker build --network host -f docker/dockerfile -t foundationposev2 .
 ```
 bash ./docker/run_container.sh 
 python node.py --resize_factor 2 --mesh_file ./assets/hackathon2/milk/milk.obj -sza 0,30,60,90,120,150,180,210,240,270,300,330 --seg_model_type sam3 --target_object white\ bottle -v warning
-python node.py --resize_factor 2 --mesh_file ./assets/hackathon2/gavottes/gavottes.obj -sza 0,180 --seg_model_type sam3 --target_object biscuit\ box -v warning
 ```
 
-Quick DDS/topic test (prints from callback only):
-```
-python dummy_node_sub.py --mode rgb
-python dummy_node_sub.py --mode depth
-python dummy_node_sub.py --mode sync --slop 0.05
-```
-
-Toggle the node
+Toggle the node (on by feault)
 ```
 ros2 topic pub /orchestrator/pose/toggle_fp std_msgs/msg/Bool data:\ true --once
 ```
@@ -97,7 +89,15 @@ spam
 ycbmustard
 ```
 
-To switch the target object (but keep the same mesh)
+## Troubleshooting
+Quick DDS/topic test (prints from callback only):
+```
+python dummy_node_sub.py --mode rgb
+python dummy_node_sub.py --mode depth
+python dummy_node_sub.py --mode sync --slop 0.05
+```
+
+To switch the target object string (but keep the same mesh)
 ```
 ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'yellow\ bottle\' --once
 ```
