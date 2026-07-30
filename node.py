@@ -27,7 +27,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, CameraInfo
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool, String
@@ -882,17 +882,28 @@ class FoundationPoseROS2Node(Node):
         # Update current phase
         self.current_phase = "Initialized"
 
-        # Initialize ROS2 subscribers and publishers
+        # QoS PROFILES
+        qos_pose = qos_profile_sensor_data
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=15, # allow for 15 frames to be buffered
+            depth=15,
         )
-        qos_info = QoSProfile(
+
+        # Commands: RELIABLE, Queue 10. Guarantees mesh loading commands aren't dropped.
+        qos_cmd = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
+            depth=10
         )
+
+        # State: RELIABLE, Queue 1. Guarantees delivery, but only keeps the freshest state.
+        qos_state = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+
         qos_marker = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -900,36 +911,44 @@ class FoundationPoseROS2Node(Node):
             depth=1,
         )
 
+        # PUBLISHERS & SUBSCRIBERS
         self._camera_info_sub = self.create_subscription(
             CameraInfo,
             self.get_parameter("camera_info_topic").value,
             self._camera_info_cb,
-            qos_info,
+            qos_state, # Camera info can use state profile
         )
 
         self._pose_pub = self.create_publisher(
             PoseStamped,
-            "object_pose",
-            1,
+            "/foundation_pose/object_pose",
+            qos_pose,
         )
+
         self._marker_pub = self.create_publisher(
             Marker,
-            "object_marker",
+            "/foundation_pose/object_marker",
             qos_marker,
+        )
+
+        self._mesh_status_pub = self.create_publisher(
+            Bool,
+            "/foundation_pose/mesh_status",
+            qos_state,
         )
 
         self._toggle_fp_sub = self.create_subscription(
             Bool,
-            "/orchestrator/pose/toggle_fp",
+            "/orchestrator/foundation_pose/toggle",
             self._toggle_fp_cb,
-            1,
+            qos_state,
         )
 
         self._target_object_sub = self.create_subscription(
             String,
-            "/orchestrator/pose/target_object",
+            "/orchestrator/foundation_pose/target_object",
             self._target_object_cb,
-            1,
+            qos_cmd,
         )
 
         sub_color = Subscriber(
@@ -1080,6 +1099,9 @@ class FoundationPoseROS2Node(Node):
             self.current_phase = "DetectingAgain"
             self._lock.release()
             self._reset_pose_filter("mesh/target object updated")
+
+            self._mesh_status_pub.publish(Bool(data=True))
+
             return
 
         else:
@@ -1097,6 +1119,7 @@ class FoundationPoseROS2Node(Node):
                 self.current_phase = "DetectingAgain"
             self.initial_detection_counter = 0
             self._reset_pose_filter("target object changed")
+
 
     def _publish_marker(self, pose_msg: PoseStamped):
         marker = Marker()
