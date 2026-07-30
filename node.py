@@ -126,7 +126,7 @@ class PoseFilter:
         F = np.eye(6, dtype=np.float64)
         F[:3, 3:] = np.eye(3, dtype=np.float64) * dt
 
-        # Q: process noise covariance. 
+        # Q: process noise covariance.
         Q = np.eye(6, dtype=np.float64) * float(process_noise)
         x_pred = np.concatenate([self.pos, self.vel], axis=0).reshape(6, 1)
         x_pred = F @ x_pred
@@ -486,23 +486,23 @@ def apply_rotate_y_in(R: np.ndarray, apply_y_in: Optional[Sequence[float]]) -> n
 
 OBJECT_KEYS_TO_PARAMETERS = {
     # flips on x and y at 180 !
-    "baguette" : {"mesh_file": "./assets/hackathon3/baguette/baguette.obj", 
-                  "symmetry_x_angles": "0,180", 
-                  "symmetry_y_angles": "0,180", 
-                  "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
-                  "target_object": "bread", 
+    "baguette" : {"mesh_file": "./assets/hackathon3/baguette/baguette.obj",
+                  "symmetry_x_angles": "0,180",
+                  "symmetry_y_angles": "0,180",
+                  "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+                  "target_object": "bread",
                   "constraint_yaw_in": 0,
                   "constraint_pitch_in": [0,180],
                   "constraint_roll_in": [0,180],
                   "apply_x_in": None,
                   "apply_y_in": None,
                   "apply_z_in": None},
-    
+
     # seems okay and does not flip
-    "banana" : {"mesh_file": "./assets/hackathon3/banana/banana.obj", 
-                "symmetry_x_angles": "", 
-                "symmetry_y_angles": "", 
-                "symmetry_z_angles": "", 
+    "banana" : {"mesh_file": "./assets/hackathon3/banana/banana.obj",
+                "symmetry_x_angles": "",
+                "symmetry_y_angles": "",
+                "symmetry_z_angles": "",
                 "target_object": "banana",
                 "constraint_yaw_in": None,
                 "constraint_pitch_in": None,
@@ -510,161 +510,176 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "apply_x_in": None,
                 "apply_y_in": None,
                 "apply_z_in": None},
-    
+
     # still flips up and down, adjusted size to retry
-    "coffeecan" : {"mesh_file": "./assets/hackathon3/coffeecan/coffeecan.obj", 
-                   "symmetry_x_angles": "", 
-                   "symmetry_y_angles": "", 
-                   "symmetry_z_angles": "", 
-                   "target_object": "blue container", 
+    "coffeecan" : {"mesh_file": "./assets/hackathon3/coffeecan/coffeecan.obj",
+                   "symmetry_x_angles": "",
+                   "symmetry_y_angles": "",
+                   "symmetry_z_angles": "",
+                   "target_object": "blue container",
                    "constraint_yaw_in": 0,
                    "constraint_pitch_in": None,
                    "constraint_roll_in": None,
                    "apply_x_in": None,
                    "apply_y_in": None,
                    "apply_z_in": None},
-    
+
     # lots of flipping difficult to stabilize
-    "egg" : {"mesh_file": "./assets/hackathon3/egg/egg.obj", 
-             "symmetry_x_angles": "0,180", 
-             "symmetry_y_angles": "0,180", 
-             "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
-             "target_object": "egg", 
+    "egg" : {"mesh_file": "./assets/hackathon3/egg/egg.obj",
+             "symmetry_x_angles": "0,180",
+             "symmetry_y_angles": "0,180",
+             "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+             "target_object": "egg",
              "constraint_yaw_in": 0,
              "constraint_pitch_in": 0,
              "constraint_roll_in": 0,
              "apply_x_in": None,
              "apply_y_in": None,
              "apply_z_in": None},
-    
+
     # good it seems that does not flip up/down but the handle does not always get oriented correctly
-    "flowercup" : {"mesh_file": "./assets/hackathon3/flowercup/flowercup.obj", 
-                   "symmetry_x_angles": "", 
-                   "symmetry_y_angles": "", 
-                   "symmetry_z_angles": "", 
-                   "target_object": "yellow mug", 
+    "flowercup" : {"mesh_file": "./assets/hackathon3/flowercup/flowercup.obj",
+                   "symmetry_x_angles": "",
+                   "symmetry_y_angles": "",
+                   "symmetry_z_angles": "",
+                   "target_object": "yellow mug",
                    "constraint_yaw_in": None,
                    "constraint_pitch_in": None,
                    "constraint_roll_in": None,
                    "apply_x_in": None,
                    "apply_y_in": None,
                    "apply_z_in": None},
-    
+
     # not detected with keyword jam
-    "jam" : {"mesh_file": "./assets/hackathon3/jam/jam.obj", 
-             "symmetry_x_angles": "", 
-             "symmetry_y_angles": "", 
-             "symmetry_z_angles": "", 
-             "target_object": "orange jam", 
+    "jam" : {"mesh_file": "./assets/hackathon3/jam/jam.obj",
+             "symmetry_x_angles": "",
+             "symmetry_y_angles": "",
+             "symmetry_z_angles": "",
+             "target_object": "orange jam",
              "constraint_yaw_in": None,
              "constraint_pitch_in": None,
              "constraint_roll_in": None,
              "apply_x_in": None,
              "apply_y_in": None,
              "apply_z_in": None},
-    
+
     # ok
-    "milk" : {"mesh_file": "./assets/hackathon3/milk/milk.obj", 
-              "symmetry_x_angles": "", 
-              "symmetry_y_angles": "", 
-              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
-              "target_object": "white bottle", 
+    "milk" : {"mesh_file": "./assets/hackathon3/milk/milk.obj",
+              "symmetry_x_angles": "",
+              "symmetry_y_angles": "",
+              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+              "target_object": "white bottle",
               "constraint_yaw_in": 0,
               "constraint_pitch_in": None,
               "constraint_roll_in": None,
               "apply_x_in": None,
               "apply_y_in": None,
               "apply_z_in": None},
-    
+
     # hard to find but seems good when found... investigate, maybe a bigger one !
-    "minicheese" : {"mesh_file": "./assets/hackathon3/minicheese/minicheese.obj", 
-                    "symmetry_x_angles": "", 
-                    "symmetry_y_angles": "", 
-                    "symmetry_z_angles": "", 
-                    "target_object": "triangle cheese", 
+    "minicheese" : {"mesh_file": "./assets/hackathon3/minicheese/minicheese.obj",
+                    "symmetry_x_angles": "",
+                    "symmetry_y_angles": "",
+                    "symmetry_z_angles": "",
+                    "target_object": "triangle cheese",
                     "constraint_yaw_in": None,
                     "constraint_pitch_in": None,
                     "constraint_roll_in": None,
                     "apply_x_in": None,
                     "apply_y_in": None,
                     "apply_z_in": None},
-    
-    # seems robust could be a good anchor point 
-    "pan" : {"mesh_file": "./assets/hackathon3/pan/pan.obj", 
-             "symmetry_x_angles": "", 
-             "symmetry_y_angles": "", 
-             "symmetry_z_angles": "", 
-             "target_object": "pan", 
+
+    # seems robust could be a good anchor point
+    "pan" : {"mesh_file": "./assets/hackathon3/pan/pan.obj",
+             "symmetry_x_angles": "",
+             "symmetry_y_angles": "",
+             "symmetry_z_angles": "",
+             "target_object": "pan",
              "constraint_yaw_in": None,
              "constraint_pitch_in": None,
              "constraint_roll_in": None,
              "apply_x_in": None,
              "apply_y_in": None,
              "apply_z_in": None},
-    
+
     # problem gets a lot of multiple objects + rotations
-    "redapple" : {"mesh_file": "./assets/hackathon3/redapple/redapple.obj", 
-                  "symmetry_x_angles": "0,180", 
-                  "symmetry_y_angles": "0,180", 
-                  "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
-                  "target_object": "red apple", 
+    "redapple" : {"mesh_file": "./assets/hackathon3/redapple/redapple.obj",
+                  "symmetry_x_angles": "0,180",
+                  "symmetry_y_angles": "0,180",
+                  "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+                  "target_object": "red apple",
                   "constraint_yaw_in": 0,
                   "constraint_pitch_in": 0,
                   "constraint_roll_in": 0,
                   "apply_x_in": None,
                   "apply_y_in": None,
                   "apply_z_in": None},
-    
-    "smallmilk" : {"mesh_file": "./assets/hackathon3/smallmilk/smallmilk.obj", 
-                   "symmetry_x_angles": "", 
-                   "symmetry_y_angles": "", 
-                   "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
-                   "target_object": "white bottle", 
+
+    "smallmilk" : {"mesh_file": "./assets/hackathon3/smallmilk/smallmilk.obj",
+                   "symmetry_x_angles": "",
+                   "symmetry_y_angles": "",
+                   "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+                   "target_object": "white bottle",
                    "constraint_yaw_in": 0,
                    "constraint_pitch_in": None,
                    "constraint_roll_in": None,
                    "apply_x_in": None,
                    "apply_y_in": None,
                    "apply_z_in": None},
-    
-    "smallsanpellegrino" : {"mesh_file": "./assets/hackathon3/smallsanpellegrino/smallsanpellegrino.obj", 
-                            "symmetry_x_angles": "", 
-                            "symmetry_y_angles": "", 
-                            "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330", 
-                            "target_object": "green bottle", 
+
+    "smallsanpellegrino" : {"mesh_file": "./assets/hackathon3/smallsanpellegrino/smallsanpellegrino.obj",
+                            "symmetry_x_angles": "",
+                            "symmetry_y_angles": "",
+                            "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+                            "target_object": "green bottle",
                             "constraint_yaw_in": 0,
                             "constraint_pitch_in": None,
                             "constraint_roll_in": None,
                             "apply_x_in": None,
                             "apply_y_in": None,
                             "apply_z_in": None},
-    
+
     # hard to detect and flips on several axes
-    "spam" : {"mesh_file": "./assets/hackathon3/spam/spam.obj", 
-              "symmetry_x_angles": "", 
-              "symmetry_y_angles": "", 
-              "symmetry_z_angles": "", 
-              "target_object": "blue container", 
+    "spam" : {"mesh_file": "./assets/hackathon3/spam/spam.obj",
+              "symmetry_x_angles": "",
+              "symmetry_y_angles": "",
+              "symmetry_z_angles": "",
+              "target_object": "blue container",
               "constraint_yaw_in": [0,180],
               "constraint_pitch_in": [0,180],
               "constraint_roll_in": [0,180],
               "apply_x_in": None,
               "apply_y_in": None,
               "apply_z_in": None},
-    
+
     # okay but flips on one axis
-    "ycbmustard" : {"mesh_file": "./assets/hackathon3/ycbmustard/ycbmustard.obj", 
-                    "symmetry_x_angles": "", 
-                    "symmetry_y_angles": "", 
-                    "symmetry_z_angles": "", 
-                    "target_object": "yellow bottle", 
+    "ycbmustard" : {"mesh_file": "./assets/hackathon3/ycbmustard/ycbmustard.obj",
+                    "symmetry_x_angles": "",
+                    "symmetry_y_angles": "",
+                    "symmetry_z_angles": "",
+                    "target_object": "yellow bottle",
                     "constraint_yaw_in": [0,180],
                     "constraint_pitch_in": None,
                     "constraint_roll_in": None,
                     "apply_x_in": None,
                     "apply_y_in": None,
                     "apply_z_in": None},
-}
+
+    "juice" : { "mesh_file": "./assets/hackathon2/juice/juice.obj",
+                "symmetry_x_angles": "",
+                "symmetry_y_angles": "",
+                "symmetry_z_angles": "",
+                "target_object": "carton bottle",
+                "constraint_yaw_in": [0,180],
+                "constraint_pitch_in": None,
+                "constraint_roll_in": None,
+                "apply_x_in": None,
+                "apply_y_in": None,
+                "apply_z_in": None
+            },
+
+    }
+
 
 class FoundationPoseROS2Node(Node):
     def __init__(self, args):
@@ -717,14 +732,14 @@ class FoundationPoseROS2Node(Node):
                 self.constraint_roll_in = params.get("constraint_roll_in")
                 print(f"Apply z in: {self.apply_z_in}")
                 break
-        
+
 
         # Get debug directory and create if it doesn't exist
         self.debug_dir = self.get_parameter("debug_dir").value
         if not self.debug_dir:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             self.debug_dir = f"{code_dir}/debug_node/{timestamp}_{args.target_object}"
-            
+
             if args.debug > 0:
                 os.makedirs(self.debug_dir, exist_ok=True)
 
@@ -748,7 +763,7 @@ class FoundationPoseROS2Node(Node):
         self.use_kalman_filter = args.use_kalman_filter
         if self.fp_verbosity not in ["debug", "info", "warning", "error", "critical"]:
             raise ValueError(f"Invalid verbosity: {self.fp_verbosity}. Valid: debug, info, warning, error, critical")
-        
+
         # Make some checks on the parameters
         assert(self.seg_model_type in ["sam3", "yolo"]), f"Invalid segmentation model type: {self.seg_model_type}"
         if self.seg_model_type == "sam3":
@@ -759,7 +774,7 @@ class FoundationPoseROS2Node(Node):
         coco_names = list(DET_NAMES.values())
         if self.seg_model_type == "yolo":
             assert(self.target_object in coco_names), f"Invalid target object: {self.target_object} (must be one of {coco_names})"
-        
+
         # Print parameters
         self.get_logger().debug("==== PARAMETERS ====")
         self.get_logger().debug(f"Mesh file: {self.mesh_file}")
@@ -784,7 +799,7 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Constraint pitch in: {self.constraint_pitch_in}")
         self.get_logger().debug(f"Constraint roll in: {self.constraint_roll_in}")
         self.get_logger().debug(f"Use Kalman filter: {self.use_kalman_filter}")
-        
+
         self.K = None # to be set by camera info callback
         self.est = None # to be set by estimator initialization
         self.current_phase = "NotInitialized"
@@ -794,15 +809,15 @@ class FoundationPoseROS2Node(Node):
         self.frame_count = 0
         self._lock = threading.Lock()
         self._processing = False
-        
+
         self.is_on = True #False
         self._prev_is_on = self.is_on
-        
+
         self.initial_detection_counter = 0
-        
+
         self.rgbd_frames_counter_received = 0
         self.rgbd_frames_counter_processed = 0
-        
+
         # Set logger and seed (for estimater)
         verbosity = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR, "critical": logging.CRITICAL}
         set_logging_format(level=verbosity[self.fp_verbosity])
@@ -813,7 +828,7 @@ class FoundationPoseROS2Node(Node):
         self.to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
         self.bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
         self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
-        
+
         # Initialize segmentation / detection model
         self.get_logger().info(f"Initializing segmentation model {self.seg_model_type} ({self.seg_model_name})...")
         if self.seg_model_type == "sam3":
@@ -835,7 +850,7 @@ class FoundationPoseROS2Node(Node):
         else:
             raise ValueError(f"Invalid segmentation model type: {self.seg_model_type}")
         self.get_logger().info(f"Segmentation model {self.seg_model_type} ({self.seg_model_name}) initialized")
-        
+
         # Load symmetry transforms (combined over x, y, z axes)
         symmetry_tfs = symmetry_tfs_from_angles(
             self.symmetry_x_angles, self.symmetry_y_angles, self.symmetry_z_angles
@@ -844,7 +859,7 @@ class FoundationPoseROS2Node(Node):
             self.get_logger().debug(f"Symmetry transforms: {symmetry_tfs.shape}")
         else:
             self.get_logger().debug(f"No symmetry transforms")
-        
+
         # Initialize estimator
         self.get_logger().info("Initializing estimator...")
         scorer = ScorePredictor()
@@ -863,10 +878,10 @@ class FoundationPoseROS2Node(Node):
             meshname=mesh_file_rn,
         )
         self.get_logger().info("FoundationPose estimator initialized")
-        
+
         # Update current phase
         self.current_phase = "Initialized"
-        
+
         # Initialize ROS2 subscribers and publishers
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -935,15 +950,15 @@ class FoundationPoseROS2Node(Node):
             slop=self.slop,
         )
         self._sync.registerCallback(self._rgbd_cb)
-        
+
         self.get_logger().info(
             f"Subscribed to {self.get_parameter('color_topic').value} and {self.get_parameter('depth_topic').value}; waiting for camera_info and RGBD messages"
         )
-        
+
         self.current_phase = "WaitingForCameraInfo"
-        
+
         self.get_logger().info("FoundationPose ROS2 node initialized")
-        
+
         # Optional pose filter (position KF + orientation SLERP smoothing)
         self._pose_filter = PoseFilter()
         self._pose_filter_last_stamp_s: Optional[float] = None
@@ -968,10 +983,10 @@ class FoundationPoseROS2Node(Node):
         self.is_on = msg.data
         self._prev_is_on = prev
         self.get_logger().info(f"FoundationPose toggled: is_on = {self.is_on}")
-        
+
         if (not prev) and self.is_on:
             self._reset_pose_filter("node toggled off->on")
-        
+
         if msg.data == False:
             if self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
                 self.get_logger().info("Stopping pose tracking back to detecting for later")
@@ -982,28 +997,28 @@ class FoundationPoseROS2Node(Node):
         if not new_target:
             self.get_logger().error("Received empty target object, ignoring")
             return
-        
+
         if new_target.startswith("mesh_update_"):
             # it will be a full update with new mesh
             self.get_logger().info(f"Received mesh update request: {new_target}. Will restart the estimator with new mesh")
             self._lock.acquire()
             key_name = new_target.replace("mesh_update_", "") # name of target e.g.
-            
+
             if key_name not in OBJECT_KEYS_TO_PARAMETERS:
                 self.get_logger().error(f"Invalid key name: {key_name}. Valid: {list(OBJECT_KEYS_TO_PARAMETERS.keys())}")
                 self._lock.release()
                 return
-            
+
             self.mesh_file = OBJECT_KEYS_TO_PARAMETERS[key_name]["mesh_file"]
             if not os.path.exists(self.mesh_file):
                 self.get_logger().error(f"Mesh file {self.mesh_file} does not exist")
                 self._lock.release()
                 return
-            
+
             basename = os.path.basename(self.mesh_file)
             rn = basename.split(".")[0]
             self._marker_mesh_resource = f"file:///mesh_assets/{rn}/{basename}"
-            
+
             self.symmetry_x_angles = OBJECT_KEYS_TO_PARAMETERS[key_name].get("symmetry_x_angles", "")
             self.symmetry_y_angles = OBJECT_KEYS_TO_PARAMETERS[key_name].get("symmetry_y_angles", "")
             self.symmetry_z_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_z_angles"]
@@ -1014,7 +1029,7 @@ class FoundationPoseROS2Node(Node):
             self.constraint_yaw_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_yaw_in")
             self.constraint_pitch_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_pitch_in")
             self.constraint_roll_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_roll_in")
-            
+
             del self.est.scorer # delete the old score predictor
             del self.est.refiner # delete the old score and refine predictors
             del self.est.glctx # delete the old glctx
@@ -1028,7 +1043,7 @@ class FoundationPoseROS2Node(Node):
             self.to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
             self.bbox = np.stack([-extents / 2, extents / 2], axis=0).reshape(2, 3)
             self.get_logger().info(f"Mesh lodaed from {self.mesh_file} | Bounds: {self.bbox.flatten()}")
-            
+
             # Load symmetry transforms (combined over x, y, z axes)
             symmetry_tfs = symmetry_tfs_from_angles(
                 self.symmetry_x_angles, self.symmetry_y_angles, self.symmetry_z_angles
@@ -1056,27 +1071,27 @@ class FoundationPoseROS2Node(Node):
                 meshname=rn,
             )
             self.get_logger().info("FoundationPose estimator re-initialized")
-            
+
             # Reset tracking so we detect the new object from scratch
             if self.current_phase in ("PoseTracking", "StartPoseTracking", "DetectingAgain"):
                 self.current_phase = "DetectingAgain"
             self.initial_detection_counter = 0
-            
+
             self.current_phase = "DetectingAgain"
             self._lock.release()
             self._reset_pose_filter("mesh/target object updated")
             return
-        
+
         else:
-            # just a change of target object        
+            # just a change of target object
             if self.seg_model_type == "yolo":
                 if new_target not in list(DET_NAMES.values()):
                     self.get_logger().error(f"Ignoring target_object '{new_target}' (not a valid COCO class). Valid: {list(DET_NAMES.values())}")
                     return
-                
+
             self.target_object = new_target
             self.get_logger().info(f"Target object changed to: {self.target_object}")
-            
+
             # Reset tracking so we detect the new object from scratch
             if self.current_phase in ("PoseTracking", "StartPoseTracking", "DetectingAgain"):
                 self.current_phase = "DetectingAgain"
@@ -1120,18 +1135,18 @@ class FoundationPoseROS2Node(Node):
         self.current_phase = "WaitingForRGBD"
 
     def _rgbd_cb(self, color_msg: CompressedImage, depth_msg: CompressedImage):
-        self.get_logger().info("Received RGBD message")
+        self.get_logger().debug("Received RGBD message")
         self.rgbd_frames_counter_received += 1
         # Skip if camera intrinsics K not received yet
         if self.K is None:
             self.get_logger().warn("Camera intrinsics K not received yet, skipping RGBD message")
             return
-        
+
         if not self.is_on:
             self.get_logger().info("Node is off, skipping RGBD message")
             self._reset_pose_filter("node is off")
             return
-        
+
         # Skip if already processing something
         if self._lock.acquire(blocking=False):
             if self._processing:
@@ -1143,7 +1158,7 @@ class FoundationPoseROS2Node(Node):
         else:
             self.get_logger().warn("Could not acquire lock, skipping RGBD message")
             return
-        
+
         # Update current phase
         try:
             if "compressed" in self.get_parameter("color_topic").value:
@@ -1154,9 +1169,9 @@ class FoundationPoseROS2Node(Node):
                 depth = decode_compressed_depth(depth_msg, self.depth_scale)
             else:
                 depth = depth_msg.data
-                
+
             self.get_logger().debug(f"Got images with size: RGB {color.shape}, Depth {depth.shape}")
-                
+
             # Resize depth to match color image size
             if color.shape[:2] != depth.shape[:2]:
                 depth = cv2.resize(
@@ -1165,7 +1180,7 @@ class FoundationPoseROS2Node(Node):
                     interpolation=cv2.INTER_NEAREST,
                 )
                 self.get_logger().debug(f"Resized depth to match color image size: RGB {color.shape}, Depth {depth.shape}")
-                
+
             if self.resize_factor != 1:
                 color = cv2.resize(
                     color,
@@ -1178,20 +1193,20 @@ class FoundationPoseROS2Node(Node):
                     interpolation=cv2.INTER_NEAREST,
                 )
                 self.get_logger().debug(f"Resized RGBD image by factor {self.resize_factor} : RGB {color.shape}, Depth {depth.shape}")
-                
+
         except ValueError as e:
             self.get_logger().error(str(e))
             self._lock.acquire()
             self._processing = False
             self._lock.release()
             return
-        
+
         self.rgbd_frames_counter_processed += 1
-        
+
         valid_pose = False
         if "Tracking" not in self.current_phase:
             self.current_phase = "Detecting"
-            
+
             if self.seg_model_type == "sam3":
                 color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
                 self.seg_model.set_image(color)
@@ -1205,13 +1220,13 @@ class FoundationPoseROS2Node(Node):
                     return
                 target_masks = results[0].masks #.data.cpu().numpy()
                 if target_masks is None:
-                    self.get_logger().warn(f"No target masks from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
+                    self.get_logger().debug(f"No target masks from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
                     self._note_pose_lost_for_filter()
                     self._lock.acquire()
                     self._processing = False
                     self._lock.release()
                     return
-                
+
                 found_obects = len(target_masks)
                 if found_obects == 1:
                     self.initial_detection_counter = self.min_initial_detection_counter # directly set to min_initial_detection_counter to start tracking
@@ -1219,7 +1234,7 @@ class FoundationPoseROS2Node(Node):
                     target_mask = target_mask[0,...].astype(np.uint8)
                     # print(type(target_mask))
                     # print(f"target_mask.shape: {target_mask.shape}, dtype: {target_mask.dtype}, min: {target_mask.min()}, max: {target_mask.max()}")
-                    self.get_logger().info(f"Initial detection counter ({self.target_object}): {self.initial_detection_counter} / {self.min_initial_detection_counter}")
+                    self.get_logger().debug(f"Initial detection counter ({self.target_object}): {self.initial_detection_counter} / {self.min_initial_detection_counter}")
                 elif found_obects > 1:
                     self.get_logger().warn(f"Multiple objects found ({found_obects}) in frame {self.rgbd_frames_counter_processed}, cannot chose")
                     self.initial_detection_counter = 0
@@ -1246,7 +1261,7 @@ class FoundationPoseROS2Node(Node):
                         if cls_name == self.target_object:
                             target_mask = mask
                             found_object += 1
-                
+
                 if found_object == 1:
                     # need min_initial_detection_counter detections in a row to start tracking
                     self.initial_detection_counter += 1
@@ -1257,7 +1272,7 @@ class FoundationPoseROS2Node(Node):
                 else:
                     # set or reset to 0 if not found
                     self.initial_detection_counter = 0
-                
+
             if self.initial_detection_counter >= self.min_initial_detection_counter:
                 self.initial_detection_counter = 0
                 self.current_phase = "PoseEstimation"
@@ -1277,11 +1292,11 @@ class FoundationPoseROS2Node(Node):
                 if self.enable_pose_tracking:
                     # if not enabled, we will just go back to running again detections and pose estimation
                     self.current_phase = "StartPoseTracking"
-                    
-                self.get_logger().info(f"Pose estimation time: {est_timer_end - est_timer_start:.3f} seconds")
-                self.get_logger().info(f"Starting tracking after {self.initial_detection_counter} initial detections with {self.target_object}")
-                
-            
+
+                self.get_logger().debug(f"Pose estimation time: {est_timer_end - est_timer_start:.3f} seconds")
+                self.get_logger().debug(f"Starting tracking after {self.initial_detection_counter} initial detections with {self.target_object}")
+
+
         elif self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
             self.current_phase = "PoseTracking"
             # perform tracking
@@ -1305,7 +1320,7 @@ class FoundationPoseROS2Node(Node):
             R_cam = center_pose[:3, :3]
             t_cam = center_pose[:3, 3]
 
-            
+
             R_cam = apply_rotate_z_in(R_cam, self.apply_z_in)
             R_cam = apply_rotate_y_in(R_cam, self.apply_y_in)
             R_cam = apply_rotate_x_in(R_cam, self.apply_x_in)
@@ -1379,12 +1394,12 @@ class FoundationPoseROS2Node(Node):
             pose_msg.header.frame_id = self.pose_frame_id
 
             euler_cam = np.array([yaw_cam, pitch_cam, roll_cam], dtype=np.float64)
-            self.get_logger().info(f"Pose: t = {t_cam}")
-            self.get_logger().info(f"R = {R_cam}")
-            self.get_logger().info(f"euler = {euler_cam}")
-            self.get_logger().info(f"yaw = {yaw_cam:.2f} deg, pitch = {pitch_cam:.2f} deg, roll = {roll_cam:.2f} deg")
+            self.get_logger().debug(f"Pose: t = {t_cam}")
+            self.get_logger().debug(f"R = {R_cam}")
+            self.get_logger().debug(f"euler = {euler_cam}")
+            self.get_logger().debug(f"yaw = {yaw_cam:.2f} deg, pitch = {pitch_cam:.2f} deg, roll = {roll_cam:.2f} deg")
 
-            new_r_cam = r_cam                 
+            new_r_cam = r_cam
             new_q_cam = new_r_cam.as_quat()
 
             # add optional filter
@@ -1412,7 +1427,7 @@ class FoundationPoseROS2Node(Node):
             pose_msg.pose.position.x = float(t_cam[0])
             pose_msg.pose.position.y = float(t_cam[1])
             pose_msg.pose.position.z = float(t_cam[2])
-            
+
             pose_msg.pose.orientation.x = float(new_q_cam[0])
             pose_msg.pose.orientation.y = float(new_q_cam[1])
             pose_msg.pose.orientation.z = float(new_q_cam[2])
@@ -1426,7 +1441,7 @@ class FoundationPoseROS2Node(Node):
         self._lock.acquire()
         self._processing = False
         self._lock.release()
-        
+
 
     def destroy_node(self):
         try:
@@ -1457,13 +1472,13 @@ if __name__ == "__main__":
     parser.add_argument("--debug_dir", type=str, default="", help="Debug directory.")
     parser.add_argument("--depth_scale", type=float, default=0.001, help="Depth scale.")
     parser.add_argument("--camera_name", type=str, default="realsense_head_front", help="Camera name.")
-    
+
     # paremters depending on the camera name
     # parser.add_argument("--color_topic", type=str, default="/rgbd/realsense_test/color/image_raw/compressed", help="Color topic.")
     # parser.add_argument("--depth_topic", type=str, default="/rgbd/realsense_test/aligned_depth_to_color/image_raw/compressedDepth", help="Depth topic.")
     # parser.add_argument("--camera_info_topic", type=str, default="/rgbd/realsense_test/color/camera_info", help="Camera info topic.")
     # parser.add_argument("--pose_frame_id", type=str, default="realsense_test_depth_optical_frame", help="Pose frame id.")
-    
+
     parser.add_argument("--use_kalman_filter", "-kf", action="store_true", default=False, help="Use Kalman filter for pose estimation.")
     parser.add_argument("--slop", type=float, default=1.0, help="Slop.")
     parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
@@ -1476,12 +1491,11 @@ if __name__ == "__main__":
     parser.add_argument("--symmetry_z_angles", "-sza", type=str, default=None, help="Symmetry yaw angles (about z). Format: 'yaw1,yaw2,yaw3,...'. Empty = no z symmetry transforms.")
     parser.add_argument("--fp_verbosity", "-v", type=str, default="info", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     args = parser.parse_args()
-    
+
     args.color_topic = f"/rgbd/{args.camera_name}/color/image_raw/compressed"
     args.depth_topic = f"/rgbd/{args.camera_name}/aligned_depth_to_color/image_raw/compressedDepth"
     args.camera_info_topic = f"/rgbd/{args.camera_name}/aligned_depth_to_color/camera_info"
     args.pose_frame_id = f"{args.camera_name}_depth_optical_frame"
-    
+
     main(args)
 
-        
