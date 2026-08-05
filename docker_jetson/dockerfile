@@ -88,7 +88,7 @@ RUN pip install https://github.com/NVIDIA/warp/releases/download/v1.16.0/warp_la
 # RUN cd / && git clone --recursive https://github.com/NVIDIAGameWorks/kaolin
 # RUN cd /kaolin && TORCH_CUDA_ARCH_LIST="11.0" FORCE_CUDA=1 pip install -e . --no-build-isolation
 
-RUN python3 -m pip install --upgrade pip
+# RUN python3 -m pip install --upgrade pip
 RUN pip install --upgrade setuptools
 RUN cd / && git clone https://github.com/NVlabs/nvdiffrast && cd /nvdiffrast && \
     TORCH_CUDA_ARCH_LIST="11.0" python3 -m pip install . --no-build-isolation --no-cache-dir
