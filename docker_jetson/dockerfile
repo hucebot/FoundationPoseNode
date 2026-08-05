@@ -85,8 +85,8 @@ RUN pip install https://github.com/isl-org/Open3D/releases/download/main-devel/o
 # Same story for warp-lang: the aarch64 CUDA 13 build lives in the GitHub release assets.
 RUN pip install https://github.com/NVIDIA/warp/releases/download/v1.16.0/warp_lang-1.16.0+cu13-py3-none-manylinux_2_34_aarch64.whl
 
-RUN cd / && git clone --recursive https://github.com/NVIDIAGameWorks/kaolin
-RUN cd /kaolin && TORCH_CUDA_ARCH_LIST="11.0" FORCE_CUDA=1 pip install -e . --no-build-isolation
+# RUN cd / && git clone --recursive https://github.com/NVIDIAGameWorks/kaolin
+# RUN cd /kaolin && TORCH_CUDA_ARCH_LIST="11.0" FORCE_CUDA=1 pip install -e . --no-build-isolation
 
 RUN python3 -m pip install --upgrade pip
 RUN pip install --upgrade setuptools
