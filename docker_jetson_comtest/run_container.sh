@@ -21,7 +21,7 @@ if [ $IsRunning -eq "0" ]; then
         -e ROS_DOMAIN_ID=2 \
         -v $(pwd)/configs/:/xml_configs \
         -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
-        -e CYCLONEDDS_URI=/xml_configs/cyclonedds.xml \
+        -e CYCLONEDDS_URI=/xml_configs/cyclonedds_jetson.xml \
         fp_comtest:latest \
         bash -c "cd $DIR && bash"
 else
