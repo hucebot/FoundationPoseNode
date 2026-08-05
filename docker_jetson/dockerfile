@@ -78,9 +78,12 @@ RUN pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable" -
 # The torch line above keeps --extra-index-url so Docker can reuse the cached layers through
 # pytorch3d. PyPI's manylinux_2_28_aarch64 torch ranks above the Jetson linux_aarch64 CUDA
 # wheel and can leave a CPU-only install; force the CUDA wheels from the Jetson index only.
+# --no-deps skips nvpl (Grace/SBSA BLAS+LAPACK), which those wheels need at import time.
 RUN pip install --force-reinstall --no-deps \
     torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 \
     --index-url ${TORCH_INDEX_URL}
+RUN pip install nvpl
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvpl/lib:${LD_LIBRARY_PATH}
 RUN python3 -c "import torch; from torch.utils.cpp_extension import CUDA_HOME; \
     print('torch', torch.__version__, '| cuda build', torch.version.cuda, '| CUDA_HOME', CUDA_HOME); \
     assert torch.version.cuda and CUDA_HOME, 'CPU-only torch installed, check the wheel index'"
