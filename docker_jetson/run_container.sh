@@ -7,8 +7,8 @@ if [ $IsRunning -eq "0" ]; then
     docker rm -f foundationposev2_jetson
     xhost +local:docker
     # Applied on the host: the container shares the host network namespace.
-    sudo sysctl -w net.ipv4.ipfrag_time=3 > /dev/null 2>&1 || true
-    sudo sysctl -w net.ipv4.ipfrag_high_thresh=134217728 > /dev/null 2>&1 || true
+    # sudo sysctl -w net.ipv4.ipfrag_time=3 > /dev/null 2>&1 || true
+    # sudo sysctl -w net.ipv4.ipfrag_high_thresh=134217728 > /dev/null 2>&1 || true
     docker run \
         --name foundationposev2_jetson \
         --runtime nvidia \
