@@ -1,0 +1,166 @@
+# Jetson AGX Thor Developer Kit — JetPack 7.2 GA / Jetson Linux (L4T) 39.2.0
+#
+# JetPack 7.2 = Ubuntu 24.04 (noble) + kernel 6.8 + CUDA 13.2.1 + cuDNN 9.20 + TensorRT 10.16.2.
+# Thor is an SBSA arm64 platform, so there is no `l4t-jetpack` / `l4t-base` image for it:
+# NVIDIA's guidance is to use the regular NGC CUDA arm64 images as the base.
+#
+# CUDA 13.0.2 is used rather than 13.2.1 so that the toolkit matches the `cu130` SBSA
+# PyTorch wheels the extensions below are compiled against. The JetPack 7.2 driver
+# (CUDA 13.2.1) is backward compatible with it. Override with --build-arg if needed.
+ARG BASE_IMAGE=nvcr.io/nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+FROM ${BASE_IMAGE}
+
+# Thor's integrated Blackwell GPU is sm_110 (it was sm_101 before CUDA 13.0).
+ENV TORCH_CUDA_ARCH_LIST=11.0
+ENV CUDA_HOME=/usr/local/cuda
+ARG MAX_JOBS=8
+ENV MAX_JOBS=${MAX_JOBS}
+# Ubuntu 24.04 marks its Python as externally managed (PEP 668); we install into it on purpose
+# so that pip packages and the ROS2 apt packages share the same Python 3.12.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+
+ENV TZ=US/Pacific
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+ARG DEBIAN_FRONTEND=noninteractive
+
+# libtiff5-dev is a transitional package on noble, libtiff-dev is the real one.
+RUN apt-get update --fix-missing && \
+    apt-get install -y libgtk2.0-dev && \
+    apt-get install -y wget bzip2 ca-certificates curl git vim tmux g++ gcc build-essential cmake checkinstall gfortran libjpeg8-dev libtiff-dev pkg-config yasm libavcodec-dev && \
+    apt-get install -y wget libavformat-dev libswscale-dev libdc1394-dev libxine2-dev libv4l-dev qtbase5-dev qt5-qmake libgtk2.0-dev libtbb-dev libatlas-base-dev libfaac-dev && \
+    apt-get install -y wget libmp3lame-dev libtheora-dev libvorbis-dev libxvidcore-dev libopencore-amrnb-dev libopencore-amrwb-dev x264 v4l-utils libprotobuf-dev protobuf-compiler && \
+    apt-get install -y wget libgoogle-glog-dev libgflags-dev libgphoto2-dev libhdf5-dev doxygen libflann-dev libboost-all-dev proj-data libproj-dev libyaml-cpp-dev cmake-curses-gui && \
+    apt-get install -y wget libzmq3-dev freeglut3-dev libegl1 libgl1-mesa-dev libosmesa6-dev
+
+
+RUN cd / && git clone https://github.com/pybind/pybind11 &&\
+    cd pybind11 && git checkout v2.10.0 &&\
+    mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DPYBIND11_INSTALL=ON -DPYBIND11_TEST=OFF &&\
+    make -j6 && make install
+
+
+RUN cd / && wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz &&\
+    tar xvzf ./eigen-3.4.0.tar.gz &&\
+    cd eigen-3.4.0 &&\
+    mkdir build &&\
+    cd build &&\
+    cmake .. &&\
+    make install
+
+SHELL ["/bin/bash", "--login", "-c"]
+
+###### Install Python Dependencies (Python 3.12 on Ubuntu 24.04)
+RUN apt-get install -y \
+    python-is-python3 \
+    python3-pip \
+    python3-dev
+
+RUN pip install "setuptools<81"
+
+###### PyTorch for Thor
+# There is no aarch64 CUDA build of torch on PyPI. The Jetson AI Lab index publishes SBSA
+# wheels compiled for CUDA 13.0 with sm_110 kernels, which is what Thor needs.
+ARG TORCH_INDEX_URL=https://pypi.jetson-ai-lab.io/sbsa/cu130
+RUN pip install torch==2.11.0 torchvision==0.25.0 torchaudio==2.10.0 \
+    --index-url ${TORCH_INDEX_URL} --extra-index-url https://pypi.org/simple
+
+# Those wheels link against libcudss.so.0, which is not part of the CUDA toolkit, and cuDSS
+# installs outside the default loader path.
+RUN apt-get update && apt-get install -y libcudss0-cuda-13
+ENV LD_LIBRARY_PATH=/usr/local/cuda/targets/sbsa-linux/lib:/usr/lib/aarch64-linux-gnu/libcudss/13:${LD_LIBRARY_PATH}
+
+RUN python3 -c "import torch; print('torch', torch.__version__, 'cuda build', torch.version.cuda)"
+
+RUN pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable" --no-build-isolation
+
+# opencv-python has no aarch64 wheel for its 5.x line; 4.13.0.90 ships an abi3 aarch64 wheel
+# that works on Python 3.12 and avoids an hour-long source build.
+RUN pip install scipy joblib scikit-learn ruamel.yaml trimesh pyyaml "opencv-python==4.13.0.90" imageio transformations einops kornia pyrender "cython>=0.29.37"
+
+# open3d publishes aarch64 wheels on GitHub only (the PyPI wheels are x86_64 / macOS).
+RUN pip install https://github.com/isl-org/Open3D/releases/download/main-devel/open3d-0.19.0-cp312-cp312-manylinux_2_35_aarch64.whl
+
+# Same story for warp-lang: the aarch64 CUDA 13 build lives in the GitHub release assets.
+RUN pip install https://github.com/NVIDIA/warp/releases/download/v1.16.0/warp_lang-1.16.0+cu13-py3-none-manylinux_2_34_aarch64.whl
+
+RUN cd / && git clone --recursive https://github.com/NVIDIAGameWorks/kaolin
+RUN cd /kaolin && TORCH_CUDA_ARCH_LIST="11.0" FORCE_CUDA=1 pip install -e . --no-build-isolation
+
+RUN python3 -m pip install --upgrade pip
+RUN pip install --upgrade setuptools
+RUN cd / && git clone https://github.com/NVlabs/nvdiffrast && cd /nvdiffrast && \
+    TORCH_CUDA_ARCH_LIST="11.0" python3 -m pip install . --no-build-isolation --no-cache-dir
+RUN python3 -c "import nvdiffrast.torch as dr; print('nvdiffrast OK')"
+
+ENV OPENCV_IO_ENABLE_OPENEXR=1
+
+RUN pip install scikit-image meshcat webdataset omegaconf pypng roma seaborn "opencv-contrib-python==4.13.0.90"
+
+RUN pip install openpyxl wandb imgaug Ninja xlsxwriter timm albumentations xatlas rtree nodejs jupyterlab objaverse g4f ultralytics==8.0.120 pycocotools videoio numba
+
+RUN pip install h5py
+
+
+
+# JetPack 7.2 is Ubuntu 24.04 based, so the matching ROS2 LTS distro is Jazzy (not Humble).
+ENV ROS_DISTRO=jazzy
+
+RUN apt-get update && apt-get upgrade -yy
+
+###### Install ROS2
+RUN apt-get install -y \
+    curl \
+    gnupg2 \
+    lsb-release
+
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
+RUN apt-get update && apt-get upgrade -y
+RUN apt install ros-${ROS_DISTRO}-desktop-full -y
+RUN apt install ros-dev-tools -y
+RUN pip install "setuptools<81"
+RUN rosdep init && rosdep update
+
+###### Install ROS Dependencies
+RUN apt install -y \
+    ros-${ROS_DISTRO}-cv-bridge \
+    ros-${ROS_DISTRO}-rviz2
+
+###### Install Intel RealSense (librealsense2 + ROS2 wrapper)
+# Note: kernel-level drivers run on the host; the container needs the userspace SDK
+# and ROS2 packages. USB access is handled at `docker run` time (see run script).
+RUN apt-get update && apt-get install -y \
+    udev \
+    usbutils \
+    ros-${ROS_DISTRO}-librealsense2* \
+    ros-${ROS_DISTRO}-realsense2-* \
+ && rm -rf /var/lib/apt/lists/*
+
+###### Set up ROS2 environment (Python 3.12 on noble)
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
+    echo "export LD_LIBRARY_PATH=/opt/ros/${ROS_DISTRO}/lib:\$LD_LIBRARY_PATH" >> ~/.bashrc && \
+    echo "export AMENT_PREFIX_PATH=/opt/ros/${ROS_DISTRO}:\$AMENT_PREFIX_PATH" >> ~/.bashrc && \
+    echo "export ROS_DOMAIN_ID=0" >> ~/.bashrc && \
+    echo "export PYTHONPATH=/opt/ros/${ROS_DISTRO}/lib/python3.12/site-packages:\$PYTHONPATH" >> ~/.bashrc
+
+###### Update Buffer
+# /proc/sys is read-only during the build; these are applied on the host by run_container.sh.
+RUN sysctl net.ipv4.ipfrag_time=3 || true
+RUN sysctl net.ipv4.ipfrag_high_thresh=134217728 || true
+
+RUN echo "export FASTDDS_BUILTIN_TRANSPORTS=LARGE_DATA?max_msg_size=1MB&soets_size=1MB&non_blocking=true&tcp_negotiation_timeout=50" >> ~/.bashrc
+
+###### Source ROS2 and workspace (ros2_ws only if present, e.g. mounted)
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc
+RUN echo "[ -f /ros2_ws/install/setup.bash ] && source /ros2_ws/install/setup.bash" >> ~/.bashrc
+
+RUN apt-get update && apt-get install -y ros-${ROS_DISTRO}-rmw-cyclonedds-cpp
+RUN echo "export ROS_DOMAIN_ID=2" >> ~/.bashrc
+
+## Fix some versions
+RUN pip install ultralytics==8.4
+
+
+# Setup shell
+ENV SHELL=/bin/bash
+RUN ln -sf /bin/bash /bin/sh

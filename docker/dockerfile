@@ -36,7 +36,8 @@ RUN apt-get install -y \
 
 RUN pip install "setuptools<81"
 
-RUN pip install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+# Kaolin (main) requires PyTorch >= 2.5.1, <= 2.12.1
+RUN pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 
 RUN pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable" --no-build-isolation
 
