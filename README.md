@@ -55,6 +55,52 @@ It includes a simplified Dockerfile compared to the original version (does not u
 docker build --network host -f docker/dockerfile -t foundationposev2 .
 ```
 
+On a Jetson AGX Thor Developer Kit (JetPack 7.2 GA / L4T 39.2.0) use the `docker_jetson` variant instead. It targets Ubuntu 24.04, CUDA 13, ROS2 Jazzy and the `sm_110` Blackwell GPU:
+```
+docker build --network host -f docker_jetson/dockerfile -t foundationposev2_jetson .
+bash ./docker_jetson/run_container.sh
+```
+
+That image takes a long time to build. To check DDS/topic connectivity with the robot first, `docker_jetson_comtest` builds a minimal ROS2 Jazzy image (no CUDA, no FoundationPose dependencies) in a few minutes:
+```
+docker build --network host -f docker_jetson_comtest/dockerfile -t fp_comtest .
+bash ./docker_jetson_comtest/run_container.sh
+ros2 topic list
+python dummy_node_sub.py --mode rgb
+```
+
+## Models
+
+Weights are not shipped in this repo (they are gitignored). Download them before running the node.
+
+### FoundationPose
+
+Download the network weights from the [FoundationPose Google Drive](https://drive.google.com/drive/folders/1DFezOAD0oD1BblsXVxqDsl8fj0qzB82i?usp=sharing) and place them under `foundationpose/weights/`:
+
+```
+foundationpose/weights/
+├── 2023-10-28-18-33-37/   # pose refiner
+│   ├── config.yml
+│   └── model_best.pth
+└── 2024-01-11-20-02-45/   # pose scorer
+    ├── config.yml
+    └── model_best.pth
+```
+
+### SAM3 (`--seg_model_type sam3`)
+
+SAM3 weights are gated and are **not** auto-downloaded by Ultralytics. Request access on [Hugging Face: facebook/sam3](https://huggingface.co/facebook/sam3), then download [`sam3.pt`](https://huggingface.co/facebook/sam3/resolve/main/sam3.pt?download=true) and place it at:
+
+```
+sam3/sam3.pt
+```
+
+(relative to the repo root / working directory when you run `node.py`).
+
+### YOLO-Seg (`--seg_model_type yolo`)
+
+Ultralytics will usually download the chosen checkpoint (e.g. `yolo26n-seg.pt`) on first use. You can also put it in the working directory (repo root).
+
 ## Run
 ```
 bash ./docker/run_container.sh 
