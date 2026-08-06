@@ -129,7 +129,7 @@ python benchmark_onnx.py \
 ```
 Without `--depth_file`, a planar fake depth is filled in the detection mask (useful for timing; poses are not metrically accurate).
 
-Toggle the node (on by feault)
+Toggle the node (on by default)
 ```
 ros2 topic pub /orchestrator/pose/toggle_fp std_msgs/msg/Bool data:\ true --once
 ```
@@ -137,6 +137,11 @@ ros2 topic pub /orchestrator/pose/toggle_fp std_msgs/msg/Bool data:\ true --once
 To switch objects : 
 ```
 ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'mesh_update_mustard\' --once
+```
+
+Toggle the tracking on or off (off by default)
+```
+ros2 topic pub /orchestrator/pose/toggle_tracking std_msgs/msg/Bool data:\ true --once
 ```
 
 Object names (update the switch objects string according to your need) : 

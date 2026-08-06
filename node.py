@@ -11,6 +11,7 @@ Subscriptions:
   - /camera/depth/image_raw/compressed (sensor_msgs/CompressedImage)
   - /camera/color/camera_info (sensor_msgs/CameraInfo) for intrinsics K
   - /orchestrator/pose/toggle_fp (std_msgs/Bool) to enable/disable the node
+  - /orchestrator/pose/toggle_tracking (std_msgs/Bool) to enable/disable pose tracking
   - /orchestrator/pose/target_object (std_msgs/String) to set the target object class at runtime
 
 Publishes:
@@ -563,6 +564,13 @@ class FoundationPoseROS2Node(Node):
             qos_state,
         )
 
+        self._toggle_tracking_sub = self.create_subscription(
+            Bool,
+            "/orchestrator/pose/toggle_tracking",
+            self._toggle_tracking_cb,
+            qos_state,
+        )
+
         self._target_object_sub = self.create_subscription(
             String,
             "/orchestrator/foundation_pose/target_object",
@@ -606,6 +614,15 @@ class FoundationPoseROS2Node(Node):
         if msg.data == False:
             if self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
                 self.get_logger().info("Stopping pose tracking back to detecting for later")
+                self.current_phase = "DetectingAgain"
+
+    def _toggle_tracking_cb(self, msg: Bool):
+        self.enable_pose_tracking = msg.data
+        self.get_logger().info(f"Pose tracking toggled: enable_pose_tracking = {self.enable_pose_tracking}")
+
+        if msg.data == False:
+            if self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
+                self.get_logger().info("Stopping pose tracking back to detecting")
                 self.current_phase = "DetectingAgain"
 
     def _target_object_cb(self, msg: String):
