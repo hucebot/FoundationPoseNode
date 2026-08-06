@@ -1,6 +1,6 @@
 """
 FoundationPose ROS2 node: subscribes to compressed RGB and depth images,
-runs object detection (YOLO) and 6-DoF pose estimation (register + track).
+runs open-vocabulary object segmentation (YOLOE or SAM3) and 6-DoF pose estimation (register + track).
 
 Requires: ROS2 (rclpy), sensor_msgs, geometry_msgs, message_filters.
 Run from workspace: python run_demo_ros2.py
@@ -12,7 +12,7 @@ Subscriptions:
   - /camera/color/camera_info (sensor_msgs/CameraInfo) for intrinsics K
   - /orchestrator/pose/toggle_fp (std_msgs/Bool) to enable/disable the node
   - /orchestrator/pose/toggle_tracking (std_msgs/Bool) to enable/disable pose tracking
-  - /orchestrator/pose/target_object (std_msgs/String) to set the target object class at runtime
+  - /orchestrator/pose/target_object (std_msgs/String) to set the target object text prompt at runtime
 
 Publishes:
   - /foundation_pose/object_pose (geometry_msgs/PoseStamped)
@@ -40,29 +40,11 @@ from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from foundationpose.estimater import *
 from sensor_msgs.msg import Image as RosImage  # after estimater * (PIL.Image otherwise shadows)
-from ultralytics import YOLO
+from ultralytics import YOLOE
 from ultralytics.models.sam import SAM3SemanticPredictor
 
 from scipy.spatial.transform import Rotation
 
-# For YOLO based detection
-DET_NAMES = {
-    0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus',
-    6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant',
-    11: 'stop sign', 12: 'parking meter', 13: 'bench', 14: 'bird', 15: 'cat', 16: 'dog',
-    17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear', 22: 'zebra',
-    23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag', 27: 'tie', 28: 'suitcase',
-    29: 'frisbee', 30: 'skis', 31: 'snowboard', 32: 'sports ball', 33: 'kite',
-    34: 'baseball bat', 35: 'baseball glove', 36: 'skateboard', 37: 'surfboard',
-    38: 'tennis racket', 39: 'bottle', 40: 'wine glass', 41: 'cup', 42: 'fork',
-    43: 'knife', 44: 'spoon', 45: 'bowl', 46: 'banana', 47: 'apple', 48: 'sandwich',
-    49: 'orange', 50: 'broccoli', 51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut',
-    55: 'cake', 56: 'chair', 57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table',
-    61: 'toilet', 62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard',
-    67: 'cell phone', 68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink',
-    72: 'refrigerator', 73: 'book', 74: 'clock', 75: 'vase', 76: 'scissors',
-    77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush',
-}
 
 def decode_compressed_color(msg: CompressedImage) -> np.ndarray:
     """Decode CompressedImage to RGB (H, W, 3) uint8."""
@@ -278,6 +260,42 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "constraint_yaw_in": [0,180],
                 "constraint_pitch_in": None,
                 "constraint_roll_in": None},
+    
+    "redcup" : {"mesh_file": "./assets/hackathon3/redcup/redcup.obj",
+                   "symmetry_x_angles": "",
+                   "symmetry_y_angles": "",
+                   "symmetry_z_angles": "",
+                   "target_object": "red mug",
+                   "constraint_yaw_in": None,
+                   "constraint_pitch_in": None,
+                   "constraint_roll_in": None},
+
+    "basket" : {"mesh_file": "./assets/hackathon3/basket/basket.obj",
+                   "symmetry_x_angles": "",
+                   "symmetry_y_angles": "",
+                   "symmetry_z_angles": "",
+                   "target_object": "fruit basket",
+                   "constraint_yaw_in": None,
+                   "constraint_pitch_in": None,
+                   "constraint_roll_in": None},
+
+    "perrier" : {"mesh_file": "./assets/hackathon3/perrier/perrier.obj",
+              "symmetry_x_angles": "",
+              "symmetry_y_angles": "",
+              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+              "target_object": "green bottle",
+              "constraint_yaw_in": 0,
+              "constraint_pitch_in": None,
+              "constraint_roll_in": None},
+
+    "solevita" : {"mesh_file": "./assets/hackathon3/solevita/solevita.obj",
+              "symmetry_x_angles": "",
+              "symmetry_y_angles": "",
+              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+              "target_object": "green bottle",
+              "constraint_yaw_in": 0,
+              "constraint_pitch_in": None,
+              "constraint_roll_in": None},
 
     }
 class FoundationPoseROS2Node(Node):
@@ -361,6 +379,7 @@ class FoundationPoseROS2Node(Node):
         self.enable_pose_tracking = args.enable_pose_tracking
         self.publish_mask_image = args.publish_mask_image
         self.seg_model_type = args.seg_model_type
+        self.yoloe_conf = args.yoloe_conf
         self.symmetry_x_angles = args.symmetry_x_angles
         self.symmetry_y_angles = args.symmetry_y_angles
         self.symmetry_z_angles = args.symmetry_z_angles
@@ -373,15 +392,11 @@ class FoundationPoseROS2Node(Node):
             raise ValueError(f"Invalid verbosity: {self.fp_verbosity}. Valid: debug, info, warning, error, critical")
 
         # Make some checks on the parameters
-        assert(self.seg_model_type in ["sam3", "yolo"]), f"Invalid segmentation model type: {self.seg_model_type}"
+        assert(self.seg_model_type in ["sam3", "yoloe"]), f"Invalid segmentation model type: {self.seg_model_type}"
         if self.seg_model_type == "sam3":
             self.seg_model_name = "sam3.pt"
-        elif self.seg_model_type == "yolo":
-            assert("yolo" in self.seg_model_name), f"Invalid YOLO model name: {self.seg_model_name}"
-
-        coco_names = list(DET_NAMES.values())
-        if self.seg_model_type == "yolo":
-            assert(self.target_object in coco_names), f"Invalid target object: {self.target_object} (must be one of {coco_names})"
+        elif self.seg_model_type == "yoloe":
+            assert("yoloe" in self.seg_model_name), f"Invalid YOLOE model name: {self.seg_model_name}"
 
         # Print parameters
         self.get_logger().debug("==== PARAMETERS ====")
@@ -397,6 +412,7 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Slop: {self.slop}")
         self.get_logger().debug(f"Resize factor: {self.resize_factor}")
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
+        self.get_logger().debug(f"YOLOE confidence threshold: {self.yoloe_conf}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
         self.get_logger().debug(f"Publish mask image: {self.publish_mask_image}")
         self.get_logger().debug(f"Symmetry x angles: {self.symmetry_x_angles}")
@@ -457,8 +473,12 @@ class FoundationPoseROS2Node(Node):
             # run a fake pass to warm up the model
             self.seg_model.set_image(np.zeros((1080, 1920, 3), dtype=np.uint8))
             self.seg_model(text=[self.target_object], verbose=False)
-        elif self.seg_model_type == "yolo":
-            self.seg_model = YOLO(self.seg_model_name)
+        elif self.seg_model_type == "yoloe":
+            # open vocabulary: the target object is given as a text prompt, no fixed class list
+            self.seg_model = YOLOE(self.seg_model_name)
+            self.seg_model.set_classes([self.target_object])
+            # run a fake pass to warm up the model
+            self.seg_model.predict(np.zeros((1080, 1920, 3), dtype=np.uint8), conf=self.yoloe_conf, verbose=False)
         else:
             raise ValueError(f"Invalid segmentation model type: {self.seg_model_type}")
         self.get_logger().info(f"Segmentation model {self.seg_model_type} ({self.seg_model_name}) initialized")
@@ -578,7 +598,7 @@ class FoundationPoseROS2Node(Node):
 
         self._toggle_tracking_sub = self.create_subscription(
             Bool,
-            "/orchestrator/pose/toggle_tracking",
+            "/orchestrator/foundation_pose/toggle_tracking",
             self._toggle_tracking_cb,
             qos_state,
         )
@@ -668,6 +688,8 @@ class FoundationPoseROS2Node(Node):
             self.symmetry_y_angles = OBJECT_KEYS_TO_PARAMETERS[key_name].get("symmetry_y_angles", "")
             self.symmetry_z_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_z_angles"]
             self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
+            if self.seg_model_type == "yoloe":
+                self.seg_model.set_classes([self.target_object])
             self.constraint_yaw_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_yaw_in")
             self.constraint_pitch_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_pitch_in")
             self.constraint_roll_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_roll_in")
@@ -738,13 +760,10 @@ class FoundationPoseROS2Node(Node):
             return
 
         else:
-            # just a change of target object
-            if self.seg_model_type == "yolo":
-                if new_target not in list(DET_NAMES.values()):
-                    self.get_logger().error(f"Ignoring target_object '{new_target}' (not a valid COCO class). Valid: {list(DET_NAMES.values())}")
-                    return
-
+            # just a change of target object, any text prompt is valid with an open vocabulary model
             self.target_object = new_target
+            if self.seg_model_type == "yoloe":
+                self.seg_model.set_classes([self.target_object])
             self.get_logger().info(f"Target object changed to: {self.target_object}")
 
             # Reset tracking so we detect the new object from scratch
@@ -946,43 +965,31 @@ class FoundationPoseROS2Node(Node):
                 else:
                     self.initial_detection_counter = 0
 
-            elif self.seg_model_type == "yolo":
-                # perform detection or initial pose estimation
+            elif self.seg_model_type == "yoloe":
+                # the model is already prompted with self.target_object, so every returned mask is a candidate
                 target_mask = None
-                found_object = 0
-                target_masks_list = []
-                results = self.seg_model.track(
-                    color,
-                    verbose=False,
-                ) # per image (if batching)
-                n_boxes = len(results) if results is not None else 0
-                self.get_logger().info(f"Frame {self.rgbd_frames_counter_processed}: YOLO found {n_boxes} object(s)")
-                for iter, result in enumerate(results):
-                    if len(result.boxes) == 0 or result.boxes.id is None:
-                        self.get_logger().warn(f"No boxes found in frame {self.rgbd_frames_counter_processed}, iter {iter}")
-                        continue
-                    class_ids = result.boxes.cls.cpu().numpy()
-                    class_names = [DET_NAMES.get(cls_id, f"class_{cls_id}") for cls_id in class_ids]
-                    scores = result.boxes.conf.cpu().numpy()
-                    track_ids = result.boxes.id.cpu().numpy()
-                    masks = result.masks.data.cpu().numpy()
-                    self.get_logger().debug(f"\n Found boxes in frame {self.rgbd_frames_counter_processed}, iter {iter}")
-                    for cls_name, score, track_id, mask in zip(class_names, scores, track_ids, masks):
-                        self.get_logger().debug(f"\t{cls_name} ({score:.2f}) {int(track_id)}")
-                        if cls_name == self.target_object:
-                            target_mask = mask
-                            found_object += 1
-                            target_masks_list.append(mask)
+                results = self.seg_model.predict(cv2.cvtColor(color, cv2.COLOR_RGB2BGR), conf=self.yoloe_conf, verbose=False) # ultralytics expects BGR
+                masks = results[0].masks
+                target_masks_list = [] if masks is None else list(masks.data.cpu().numpy())
+                found_object = len(target_masks_list)
+
+                speed = results[0].speed
+                total_latency = speed.get("preprocess", 0) + speed.get("inference", 0) + speed.get("postprocess", 0)
+                self.get_logger().info(
+                    f"Frame {self.rgbd_frames_counter_processed}: YOLOE found {found_object} '{self.target_object}', latency: {total_latency:.2f} ms"
+                )
+                self.get_logger().debug(f"Scores: {results[0].boxes.conf.cpu().numpy()}")
 
                 if self.publish_mask_image and target_masks_list:
                     self._publish_mask_image(color, target_masks_list, color_msg.header)
 
                 if found_object == 1:
                     # need min_initial_detection_counter detections in a row to start tracking
+                    target_mask = target_masks_list[0]
                     self.initial_detection_counter += 1
                     self.get_logger().info(f"Initial detection counter ({self.target_object}): {self.initial_detection_counter} / {self.min_initial_detection_counter}")
                 elif found_object > 1:
-                    self.get_logger().warn(f"Multiple objects found ({found_object}) in frame {self.rgbd_frames_counter_processed}, iter {iter} cannot chose")
+                    self.get_logger().warn(f"Multiple objects found ({found_object}) in frame {self.rgbd_frames_counter_processed}, cannot chose")
                     self.initial_detection_counter = 0
                 else:
                     # set or reset to 0 if not found
@@ -1159,8 +1166,9 @@ if __name__ == "__main__":
     parser.add_argument("--depth_scale", type=float, default=0.001, help="Depth scale.")
     parser.add_argument("--camera_name", type=str, default="realsense_head_front", help="Camera name.")
     parser.add_argument("--slop", type=float, default=1.0, help="Slop.")
-    parser.add_argument("--seg_model_type", type=str, default="yolo", help="Segmentation model type.")
-    parser.add_argument("--seg_model_name", type=str, default="yolo26n-seg.pt", help="Segmentation model name.")
+    parser.add_argument("--seg_model_type", type=str, default="yoloe", choices=["yoloe", "sam3"], help="Segmentation model type, both are open vocabulary.")
+    parser.add_argument("--seg_model_name", type=str, default="yoloe-26s-seg.pt", help="Segmentation model name (ignored for sam3).")
+    parser.add_argument("--yoloe_conf", type=float, default=0.15, help="Confidence threshold for the YOLOE detections.")
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")

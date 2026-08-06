@@ -103,9 +103,11 @@ sam3/sam3.pt
 
 (relative to the repo root / working directory when you run `node.py`).
 
-### YOLO-Seg (`--seg_model_type yolo`)
+### YOLOE (`--seg_model_type yoloe`)
 
-Ultralytics will usually download the chosen checkpoint (e.g. `yolo26n-seg.pt`) on first use. You can also put it in the working directory (repo root).
+[YOLOE](https://docs.ultralytics.com/models/yoloe) is open vocabulary too: the `target_object` string is used as a text prompt, so it is not restricted to COCO classes.
+
+Ultralytics will usually download the chosen checkpoint (e.g. `yoloe-26s-seg.pt`, or `yoloe-26n/m/l/x-seg.pt` for other sizes) on first use. You can also put it in the working directory (repo root). The text encoder weights (`mobileclip_blt.ts`) are downloaded on first `set_classes()` call.
 
 ## Run
 ```
@@ -131,12 +133,12 @@ Without `--depth_file`, a planar fake depth is filled in the detection mask (use
 
 Toggle the node (on by default)
 ```
-ros2 topic pub /orchestrator/pose/toggle_fp std_msgs/msg/Bool data:\ true --once
+ros2 topic pub /orchestrator/foundation_pose/toggle_fp std_msgs/msg/Bool data:\ true --once
 ```
 
 To switch objects : 
 ```
-ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'mesh_update_mustard\' --once
+ros2 topic pub /orchestrator/foundation_pose/target_object std_msgs/msg/String data:\ \'mesh_update_mustard\' --once
 ```
 
 Toggle the tracking on or off (off by default)
@@ -190,10 +192,11 @@ ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'yel
 - `camera_info_topic`
 - `pose_frame_id`
 - `slop`
-- `seg_model_type` : either `yolo` (will use a YOLO-Seg model with COCO-classes, then the `target_object` must be one of those classes, e.g. `bottle`) or `sam3` (open vocabulary)
-- `seg_model_name` : will always default to `sam3.pt` if seg_model_type is sam3 otherwise use to specify the YOLO-Seg model size e.g. `yolo26n-seg.pt`
+- `seg_model_type` : either `yoloe` or `sam3`, both are open vocabulary so the `target_object` can be any text prompt (e.g. `yellow bottle`)
+- `seg_model_name` : will always default to `sam3.pt` if seg_model_type is sam3 otherwise use to specify the YOLOE model size e.g. `yoloe-26s-seg.pt`
+- `yoloe_conf` : confidence threshold of the YOLOE detections, defaults to `0.15` (lower than the ultralytics default of `0.25` since open vocabulary prompts often score low)
 - `resize_factor` : divide the image size by this factor to reduce memory usage
-- `min_initial_detection_counter` : requires minimum consecutive detections (with one and only one valid object in the frame) at the begining before starting the pose estimation (only usable when `seg_model_type` is `yolo`)
+- `min_initial_detection_counter` : requires minimum consecutive detections (with one and only one valid object in the frame) at the begining before starting the pose estimation (only usable when `seg_model_type` is `yoloe`)
 - `enable_pose_tracking` : do pose tracking, otherwise keep re-doing the initial pose estimation for each frame
 - `fix_rotation_convention` : change the object yaw rotation (around its `z` axis) with 4 options :
   - `None` : Keep the model output
