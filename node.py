@@ -859,9 +859,9 @@ class FoundationPoseROS2Node(Node):
                     scores = result.boxes.conf.cpu().numpy()
                     track_ids = result.boxes.id.cpu().numpy()
                     masks = result.masks.data.cpu().numpy()
-                    print(f"\n ===== [{self.rgbd_frames_counter_processed}] {iter} =====")
+                    self.get_logger().debug(f"\n Found boxes in frame {self.rgbd_frames_counter_processed}, iter {iter}")
                     for cls_name, score, track_id, mask in zip(class_names, scores, track_ids, masks):
-                        print(f"\t{cls_name} ({score:.2f}) {int(track_id)}")
+                        self.get_logger().debug(f"\t{cls_name} ({score:.2f}) {int(track_id)}")
                         if cls_name == self.target_object:
                             target_mask = mask
                             found_object += 1
@@ -904,7 +904,7 @@ class FoundationPoseROS2Node(Node):
         elif self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
             self.current_phase = "PoseTracking"
             # perform tracking
-            print("============ PoseTracking =============")
+            self.get_logger().info("Starting pose tracking")
             track_timer_start = time.time()
             pose = self.est.track_one(
                 rgb=color,
@@ -1038,7 +1038,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--object_key", type=str, choices=sorted(OBJECT_KEYS_TO_PARAMETERS.keys()), default="juice", help="Object keyword from OBJECT_KEYS_TO_PARAMETERS.")
+    parser.add_argument("--object_key", type=str, choices=sorted(OBJECT_KEYS_TO_PARAMETERS.keys()), default="milk", help="Object keyword from OBJECT_KEYS_TO_PARAMETERS.")
     parser.add_argument("--est_refine_iter", type=int, default=5, help="Number of refinement iterations for registration.")
     parser.add_argument("--track_refine_iter", type=int, default=2, help="Number of refinement iterations for tracking.")
     parser.add_argument("--debug", type=int, default=1, help="Debug level.")
