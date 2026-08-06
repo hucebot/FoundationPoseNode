@@ -39,7 +39,7 @@ from visualization_msgs.msg import Marker
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from foundationpose.estimater import *
-from sensor_msgs.msg import Image  # after estimater * (PIL.Image would otherwise shadow this)
+from sensor_msgs.msg import Image as RosImage  # after estimater * (PIL.Image otherwise shadows)
 from ultralytics import YOLO
 from ultralytics.models.sam import SAM3SemanticPredictor
 
@@ -564,7 +564,7 @@ class FoundationPoseROS2Node(Node):
         self._mask_image_pub = None
         if self.publish_mask_image:
             self._mask_image_pub = self.create_publisher(
-                Image,
+                RosImage,
                 "/foundation_pose/mask_image",
                 qos_sensor,
             )
@@ -798,7 +798,7 @@ class FoundationPoseROS2Node(Node):
             vis[sel] = (0.45 * vis[sel].astype(np.float32) + 0.55 * color).astype(np.uint8)
 
         vis = np.ascontiguousarray(vis)
-        msg = Image()
+        msg = RosImage()
         msg.header = header
         msg.height = vis.shape[0]
         msg.width = vis.shape[1]

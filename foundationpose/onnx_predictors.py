@@ -69,20 +69,30 @@ _SCORE_CFG = {
 
 
 def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
-    """Pick ORT execution providers: TensorRT > CUDA > CPU."""
+    """Pick ORT execution providers.
+
+    If prefer_tensorrt is True, TensorRT must be usable or this raises.
+    If prefer_tensorrt is False, use CUDA then CPU.
+    """
     import onnxruntime as ort
 
     available = set(ort.get_available_providers())
     providers = []
 
-    # ORT may report the TensorRT EP as available because the wheel was built
-    # with it, even when the container does not ship the TensorRT runtime libs.
-    # In that case, explicitly requesting TRT makes ORT emit loud load errors and
-    # may fall back less gracefully than going straight to CUDA.
-    trt_lib_dir = _find_tensorrt_lib_dir()
-    has_trt_runtime = trt_lib_dir is not None
-    if prefer_tensorrt and "TensorrtExecutionProvider" in available and has_trt_runtime:
-        _preload_tensorrt_runtime(trt_lib_dir)
+    if prefer_tensorrt:
+        if "TensorrtExecutionProvider" not in available:
+            raise RuntimeError(
+                "TensorRT was requested (--prefer_tensorrt / default), but "
+                "TensorrtExecutionProvider is not built into this onnxruntime. "
+                "Use --no_prefer_tensorrt for CUDAExecutionProvider."
+            )
+        trt_lib_dir = _find_tensorrt_lib_dir()
+        if not _try_load_tensorrt_runtime(trt_lib_dir):
+            raise RuntimeError(
+                "TensorRT was requested, but libnvinfer could not be loaded "
+                f"(searched dir={trt_lib_dir!r}). Install TensorRT runtime libs "
+                "or use --no_prefer_tensorrt for CUDAExecutionProvider."
+            )
         providers.append(
             (
                 "TensorrtExecutionProvider",
@@ -92,18 +102,6 @@ def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
                     "trt_engine_cache_path": os.path.join(DEFAULT_ONNX_DIR, "trt_cache"),
                 },
             )
-        )
-    elif prefer_tensorrt and "TensorrtExecutionProvider" in available and not has_trt_runtime:
-        logging.warning(
-            "TensorRT EP is available in onnxruntime, but TensorRT runtime libraries "
-            "were not found; falling back to CUDAExecutionProvider. "
-            "Pass --no_prefer_tensorrt to silence this."
-        )
-    elif prefer_tensorrt and "TensorrtExecutionProvider" not in available:
-        logging.warning(
-            "TensorrtExecutionProvider is not built into this onnxruntime wheel; "
-            "falling back to CUDAExecutionProvider. "
-            "Pass --no_prefer_tensorrt to silence this."
         )
 
     if "CUDAExecutionProvider" in available:
@@ -118,13 +116,8 @@ def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
 
 
 def _find_tensorrt_lib_dir() -> Optional[str]:
-    """Locate pip or system TensorRT shared libraries."""
+    """Locate pip or system TensorRT shared-library directory (or None)."""
     candidates = []
-
-    found = ctypes.util.find_library("nvinfer")
-    if found:
-        # The system loader can already find it, so no explicit preload dir is needed.
-        return ""
 
     try:
         import tensorrt_libs  # type: ignore
@@ -147,8 +140,12 @@ def _find_tensorrt_lib_dir() -> Optional[str]:
     candidates.extend(glob.glob("/usr/local/lib/python*/dist-packages/tensorrt_libs"))
     candidates.extend(glob.glob("/usr/local/lib/python*/site-packages/tensorrt_libs"))
 
+    found = ctypes.util.find_library("nvinfer")
+    if found and os.path.isabs(found):
+        candidates.insert(0, os.path.dirname(found))
+
     for directory in candidates:
-        if not directory:
+        if not directory or not os.path.isdir(directory):
             continue
         if os.path.isfile(os.path.join(directory, "libnvinfer.so.10")):
             return directory
@@ -157,14 +154,41 @@ def _find_tensorrt_lib_dir() -> Optional[str]:
     return None
 
 
-def _preload_tensorrt_runtime(trt_lib_dir: str) -> None:
-    """Load TensorRT libs from pip/system location so ORT can enable the TRT EP."""
+def _try_load_tensorrt_runtime(trt_lib_dir: Optional[str]) -> bool:
+    """Return True only if libnvinfer can be loaded into this process."""
+    lib_candidates = []
     if trt_lib_dir:
         os.environ["LD_LIBRARY_PATH"] = f"{trt_lib_dir}:{os.environ.get('LD_LIBRARY_PATH', '')}"
-        for lib_name in ("libnvinfer.so.10", "libnvinfer_plugin.so.10", "libnvonnxparser.so.10"):
-            lib_path = os.path.join(trt_lib_dir, lib_name)
-            if os.path.isfile(lib_path):
-                ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
+        for name in ("libnvinfer.so.10", "libnvinfer.so"):
+            path = os.path.join(trt_lib_dir, name)
+            if os.path.isfile(path):
+                lib_candidates.append(path)
+        lib_candidates.extend(sorted(glob.glob(os.path.join(trt_lib_dir, "libnvinfer.so*"))))
+
+    found = ctypes.util.find_library("nvinfer")
+    if found:
+        lib_candidates.append(found)
+
+    seen = set()
+    for lib_path in lib_candidates:
+        if not lib_path or lib_path in seen:
+            continue
+        seen.add(lib_path)
+        try:
+            ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
+            # Also try companion libs when we know the directory.
+            if trt_lib_dir:
+                for extra in ("libnvinfer_plugin.so.10", "libnvonnxparser.so.10"):
+                    extra_path = os.path.join(trt_lib_dir, extra)
+                    if os.path.isfile(extra_path):
+                        try:
+                            ctypes.CDLL(extra_path, mode=ctypes.RTLD_GLOBAL)
+                        except OSError:
+                            pass
+            return True
+        except OSError as e:
+            logging.debug(f"Could not load TensorRT lib {lib_path}: {e}")
+    return False
 
 
 class OnnxSession:
@@ -202,6 +226,14 @@ class OnnxSession:
         logging.info(f"Creating ONNX Runtime session with providers={providers}")
         self.session = ort.InferenceSession(onnx_path, sess_options=so, providers=providers)
         self.providers = self.session.get_providers()
+
+        if prefer_tensorrt and "TensorrtExecutionProvider" not in self.providers:
+            raise RuntimeError(
+                "TensorRT was requested, but the active ONNX Runtime providers are "
+                f"{self.providers} (TensorrtExecutionProvider missing). "
+                "Fix TensorRT install/LD_LIBRARY_PATH, or use --no_prefer_tensorrt."
+            )
+
         logging.info(
             f"Loaded ONNX {os.path.basename(onnx_path)} in {time.time()-t0:.2f}s "
             f"providers={self.providers}"
