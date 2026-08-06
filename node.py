@@ -407,7 +407,7 @@ class FoundationPoseROS2Node(Node):
         self.rgbd_frames_counter_received = 0
         self.rgbd_frames_counter_processed = 0
 
-        # Set logger and seed (for estimater)
+        # Set logger and seed (for estimater, not for ROS get_logger())
         verbosity = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR, "critical": logging.CRITICAL}
         set_logging_format(level=verbosity[self.fp_verbosity])
         set_seed(0)
@@ -424,16 +424,18 @@ class FoundationPoseROS2Node(Node):
             # Initialize predictor with configuration
             overrides = dict(
                 conf=0.25,
+                imgsz=644,
                 task="segment",
                 mode="predict",
                 model=f"sam3/{self.seg_model_name}",
                 half=True,  # Use FP16 for faster inference
                 save=False,
+                verbose=False,
             )
             self.seg_model = SAM3SemanticPredictor(overrides=overrides)
             # run a fake pass to warm up the model
             self.seg_model.set_image(np.zeros((1080, 1920, 3), dtype=np.uint8))
-            self.seg_model(text=[self.target_object])
+            self.seg_model(text=[self.target_object], verbose=False)
         elif self.seg_model_type == "yolo":
             self.seg_model = YOLO(self.seg_model_name)
         else:
@@ -452,6 +454,7 @@ class FoundationPoseROS2Node(Node):
         # Initialize estimator
         self.get_logger().info("Initializing estimator...")
         if self.use_onnx:
+            self.get_logger().info(f"Using ONNX predictors (prefer_tensorrt: {self.prefer_tensorrt})")
             from foundationpose.onnx_predictors import PoseRefinePredictorOnnx, ScorePredictorOnnx
             scorer_kwargs = {"prefer_tensorrt": self.prefer_tensorrt}
             refiner_kwargs = {"prefer_tensorrt": self.prefer_tensorrt}
@@ -816,7 +819,23 @@ class FoundationPoseROS2Node(Node):
             if self.seg_model_type == "sam3":
                 color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
                 self.seg_model.set_image(color)
-                results = self.seg_model(text=[self.target_object])
+                results = self.seg_model(text=[self.target_object], verbose=False)
+                
+                # Log SAM3 inference speed and results
+                n_masks = len(results[0].masks) if results is not None and results[0].masks is not None else 0
+                speed = results[0].speed if results is not None else {}
+                preprocess_latency = speed.get("preprocess", 0)
+                inference_latency = speed.get("inference", 0)
+                postprocess_latency = speed.get("postprocess", 0)
+                total_latency = preprocess_latency + inference_latency + postprocess_latency
+                self.get_logger().info(
+                    f"Frame {self.rgbd_frames_counter_processed}: SAM3 found {n_masks} object(s), latency: {total_latency:.2f} ms"
+                )
+                self.get_logger().debug(
+                    f"Frame {self.rgbd_frames_counter_processed}: SAM3 speed: "
+                    f"preprocess={preprocess_latency:.2f}ms, inference={inference_latency:.2f}ms, postprocess={postprocess_latency:.2f}ms"
+                )
+           
                 if results is None:
                     self.get_logger().warn(f"No results from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
                     self._lock.acquire()
@@ -825,7 +844,7 @@ class FoundationPoseROS2Node(Node):
                     return
                 target_masks = results[0].masks #.data.cpu().numpy()
                 if target_masks is None:
-                    self.get_logger().debug(f"No target masks from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
+                    self.get_logger().error(f"No target masks from segmentation model for frame {self.rgbd_frames_counter_processed} (model type: {self.seg_model_type}, object: {self.target_object})")
                     self._lock.acquire()
                     self._processing = False
                     self._lock.release()
@@ -849,7 +868,12 @@ class FoundationPoseROS2Node(Node):
                 # perform detection or initial pose estimation
                 target_mask = None
                 found_object = 0
-                results = self.seg_model.track(color) # per image (if batching)
+                results = self.seg_model.track(
+                    color,
+                    verbose=False,
+                ) # per image (if batching)
+                n_boxes = len(results) if results is not None else 0
+                self.get_logger().info(f"Frame {self.rgbd_frames_counter_processed}: YOLO found {n_boxes} object(s)")
                 for iter, result in enumerate(results):
                     if len(result.boxes) == 0 or result.boxes.id is None:
                         self.get_logger().warn(f"No boxes found in frame {self.rgbd_frames_counter_processed}, iter {iter}")
@@ -890,15 +914,16 @@ class FoundationPoseROS2Node(Node):
                     depth=depth,
                     ob_mask=target_mask,
                     iteration=self.est_refine_iter,
+                    ros_logger=self.get_logger(),
                 )
                 valid_pose = True # always True for now
                 est_timer_end = time.time()
+                self.get_logger().info(f"Frame {self.rgbd_frames_counter_processed}: Pose estimation time {(est_timer_end - est_timer_start)*1000:.2f} ms")
+                
                 if self.enable_pose_tracking:
                     # if not enabled, we will just go back to running again detections and pose estimation
                     self.current_phase = "StartPoseTracking"
-
-                self.get_logger().debug(f"Pose estimation time: {est_timer_end - est_timer_start:.3f} seconds")
-                self.get_logger().debug(f"Starting tracking after {self.initial_detection_counter} initial detections with {self.target_object}")
+                    self.get_logger().info(f"Starting tracking with {self.target_object}")
 
 
         elif self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
@@ -911,10 +936,11 @@ class FoundationPoseROS2Node(Node):
                 depth=depth,
                 K=self.K,
                 iteration=self.track_refine_iter,
+                ros_logger=self.get_logger(),
             )
             valid_pose = True # always True for now
             track_timer_end = time.time()
-            self.get_logger().info(f"Tracking time: {track_timer_end - track_timer_start:.3f} seconds")
+            self.get_logger().info(f"Frame {self.rgbd_frames_counter_processed}: Tracking time {(track_timer_end - track_timer_start)*1000:.2f} ms")
 
         if valid_pose:
             # center_pose = pose@np.linalg.inv(self.to_origin)

@@ -179,12 +179,15 @@ class FoundationPose:
     return center.reshape(3)
 
 
-  def register(self, K, rgb, depth, ob_mask, ob_id=None, glctx=None, iteration=5):
+  def register(self, K, rgb, depth, ob_mask, ob_id=None, glctx=None, iteration=5, ros_logger=None):
     '''Copmute pose from given pts to self.pcd
     @pts: (N,3) np array, downsampled scene points
     '''
     set_seed(0)
     logging.info('Welcome')
+    
+    if ros_logger is not None:
+      ros_logger = logging
 
     if self.glctx is None:
       if glctx is None:
@@ -207,6 +210,7 @@ class FoundationPose:
     valid = (depth>=0.001) & (ob_mask>0)
     if valid.sum()<4:
       logging.info(f'valid too small, return')
+      ros_logger.warn(f'[FoundationPose.register] not enough valid points, return')
       pose = np.eye(4)
       pose[:3,3] = self.guess_translation(depth=depth, mask=ob_mask, K=K)
       return pose
@@ -223,10 +227,16 @@ class FoundationPose:
     self.ob_id = ob_id
     self.ob_mask = ob_mask
 
+    t0 = time.time()
     poses = self.generate_random_pose_hypo(K=K, rgb=rgb, depth=depth, mask=ob_mask, scene_pts=None)
+    ros_logger.debug(f"[FoundationPose.register] generate_random_pose_hypo ({poses.shape}): {(time.time()-t0)*1000:.2f} ms")
+    
     poses = poses.data.cpu().numpy()
     logging.info(f'poses:{poses.shape}')
+
+    t0 = time.time()
     center = self.guess_translation(depth=depth, mask=ob_mask, K=K)
+    ros_logger.debug(f"[FoundationPose.register] guess_translation: {(time.time()-t0)*1000:.2f} ms")
 
     poses = torch.as_tensor(poses, device='cuda', dtype=torch.float)
     poses[:,:3,3] = torch.as_tensor(center.reshape(1,3), device='cuda')
@@ -235,11 +245,16 @@ class FoundationPose:
     logging.info(f"after viewpoint, add_errs min:{add_errs.min()}")
 
     xyz_map = depth2xyzmap(depth, K)
+    t0 = time.time()
     poses, vis = self.refiner.predict(mesh=self.mesh, mesh_tensors=self.mesh_tensors, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, xyz_map=xyz_map, glctx=self.glctx, mesh_diameter=self.diameter, iteration=iteration, get_vis=self.debug>=2)
+    ros_logger.debug(f"[FoundationPose.register] refiner.predict (iteration={iteration}): {(time.time()-t0)*1000:.2f} ms")
+    
     if vis is not None:
       imageio.imwrite(f'{self.debug_dir}/vis_refiner.png', vis)
 
+    t0 = time.time()
     scores, vis = self.scorer.predict(mesh=self.mesh, rgb=rgb, depth=depth, K=K, ob_in_cams=poses.data.cpu().numpy(), normal_map=normal_map, mesh_tensors=self.mesh_tensors, glctx=self.glctx, mesh_diameter=self.diameter, get_vis=self.debug>=2)
+    ros_logger.debug(f"[FoundationPose.register] scorer.predict: {(time.time()-t0)*1000:.2f} ms")
     if vis is not None:
       imageio.imwrite(f'{self.debug_dir}/vis_score.png', vis)
 
@@ -270,7 +285,10 @@ class FoundationPose:
     return -torch.ones(len(poses), device='cuda', dtype=torch.float)
 
 
-  def track_one(self, rgb, depth, K, iteration, extra={}):
+  def track_one(self, rgb, depth, K, iteration, extra={}, ros_logger=None):
+    if ros_logger is not None:
+      ros_logger = logging
+      
     if self.pose_last is None:
       logging.info("Please init pose by register first")
       raise RuntimeError
@@ -283,7 +301,9 @@ class FoundationPose:
 
     xyz_map = depth2xyzmap_batch(depth[None], torch.as_tensor(K, dtype=torch.float, device='cuda')[None], zfar=np.inf)[0]
 
+    t0 = time.time()
     pose, vis = self.refiner.predict(mesh=self.mesh, mesh_tensors=self.mesh_tensors, rgb=rgb, depth=depth, K=K, ob_in_cams=self.pose_last.reshape(1,4,4).data.cpu().numpy(), normal_map=None, xyz_map=xyz_map, mesh_diameter=self.diameter, glctx=self.glctx, iteration=iteration, get_vis=self.debug>=2)
+    ros_logger.debug(f"[FoundationPose.track_one] refiner.predict (iteration={iteration}): {(time.time()-t0)*1000:.2f} ms")
     logging.info("pose done")
     if self.debug>=2:
       extra['vis'] = vis
