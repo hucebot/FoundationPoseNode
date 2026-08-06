@@ -130,6 +130,11 @@ RUN ln -sf /bin/bash /bin/sh
 # Rebuild required before: python node.py --use_onnx / python benchmark_onnx.py
 RUN pip install --no-cache-dir "onnxruntime-gpu>=1.17,<1.23" onnx
 
+###### MoGe monocular depth (optional --depth_source moge in node.py)
+# utils3d is required by microsoft/MoGe; code lives in ./moge (gitignored), weights in *.pt
+RUN pip install --no-cache-dir huggingface_hub \
+    "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183"
+
 ###### TensorRT runtime for ONNX Runtime TensorRT EP (x86_64 desktop image)
 # Keep this at the very end to preserve the cache of the layers above.
 # `onnxruntime-gpu` may advertise the TensorRT EP even when libnvinfer is absent;

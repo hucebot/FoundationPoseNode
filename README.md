@@ -1,5 +1,7 @@
 # Foundation Pose Node
 
+> **MoGe depth (`--depth_source moge`)** — download [Ruicheng/moge-2-vitb-normal](https://huggingface.co/Ruicheng/moge-2-vitb-normal) as `moge2_vitb_normal.pt` at the repo root, and place the [microsoft/MoGe](https://github.com/microsoft/MoGe) source under `./moge`. See [Models](#moge-2-required-for---depth_source-moge) for details.
+
 ## FoundationPose
 Derived from [FoundationPose](github.com/NVlabs/FoundationPose)
 
@@ -36,6 +38,19 @@ Using models of Ultralytics such as
 }
 ```
 
+Optional monocular depth from [MoGe](https://github.com/microsoft/MoGe) (MoGe-2):
+```bibtex
+@misc{wang2025moge2,
+      title={MoGe-2: Accurate Monocular Geometry with Metric Scale and Sharp Details},
+      author={Ruicheng Wang and Sicheng Xu and Yue Dong and Yu Deng and Jianfeng Xiang and Zelong Lv and Guangzhong Sun and Xin Tong and Jiaolong Yang},
+      year={2025},
+      eprint={2507.02546},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2507.02546},
+}
+```
+
 ## Summary of changes
 
 1. Detection and segmentation
@@ -44,10 +59,13 @@ This repository integrates FoundationPose with a detection and segmentation mode
 2. ROS Node
 The pipeline is turned into a ROS2 Node with the following input and output :
 
-- Input : RGB (`CompressedImage`), Depth (`CompressedImage`), camera intrinsics (`CameraInfo`), object mesh model (`.obj` file)
-- Output : 6D Pose (`PoseStamped`)
+- Input : RGB (`CompressedImage`), Depth (`CompressedImage`, when `--depth_source realsense`), camera intrinsics (`CameraInfo`), object mesh model (`.obj` file)
+- Output : 6D Pose (`PoseStamped`); optional mask overlay and MoGe depth `image_raw`
 
-3. Simplified Dockerfile
+3. Optional MoGe depth
+With `--depth_source moge`, RealSense depth is replaced by [MoGe-2](https://github.com/microsoft/MoGe) metric depth from RGB only (color topic + camera_info).
+
+4. Simplified Dockerfile
 It includes a simplified Dockerfile compared to the original version (does not using conda in the docker). The installation contains FoundationPose dependencies and ROS dependencies.
 
 ## Install
@@ -64,6 +82,22 @@ bash ./docker_jetson/run_container.sh
 ## Models
 
 Weights are not shipped in this repo (they are gitignored). Download them before running the node.
+
+### MoGe-2 (required for `--depth_source moge`)
+
+Download the [Ruicheng/moge-2-vitb-normal](https://huggingface.co/Ruicheng/moge-2-vitb-normal) checkpoint and place it at the repo root as:
+
+```
+moge2_vitb_normal.pt
+```
+
+```
+# from Hugging Face (filename in the repo is model.pt)
+wget -O moge2_vitb_normal.pt \
+  https://huggingface.co/Ruicheng/moge-2-vitb-normal/resolve/main/model.pt
+```
+
+Also put the MoGe source tree under `./moge` (e.g. clone [microsoft/MoGe](https://github.com/microsoft/MoGe) into that folder). The node adds `./moge` to `sys.path` and loads `moge.model.v2.MoGeModel`. Docker images install the `utils3d` dependency used by MoGe.
 
 ### FoundationPose
 
@@ -124,6 +158,15 @@ bash ./docker/run_container.sh
 python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --ros_verbosity info --publish_mask_image
 ```
 
+### MoGe depth instead of RealSense
+Requires `moge2_vitb_normal.pt` and `./moge` (see Models above). Subscribes to color + camera_info only; publishes poses in the color optical frame.
+```
+python node.py --object_key milk --depth_source moge --publish_moge_depth --ros_verbosity info
+```
+Optional: `--moge_checkpoint ./moge2_vitb_normal.pt`, `--moge_resolution_level 5` (lower is faster), `--moge_no_camera_fov`, `--moge_depth_topic /foundation_pose/moge_depth/image_raw`.
+
+With `--publish_moge_depth`, MoGe depth is published as `sensor_msgs/Image` with `encoding: 16UC1` (millimeters), matching RealSense `image_raw` for easy RViz display.
+
 ### ONNX node (TAO refine/score)
 Same arguments as `node.py`, plus `--use_onnx` so refine/score use the NGC ONNX models via ONNX Runtime:
 ```
@@ -180,7 +223,13 @@ ycbmustard
 - `est_refine_iter` / `track_refine_iter` : FoundationPose refine iters for register / track
 - `debug` / `debug_dir` : debug level and output directory (auto path if empty)
 - `depth_scale` : depth units to meters (default `0.001`)
-- `slop` : RGB–depth sync slop
+- `depth_source` : `realsense` (synced RGB+depth) or `moge` (RGB-only + MoGe-2 metric depth)
+- `moge_checkpoint` : path to MoGe-2 weights (default `./moge2_vitb_normal.pt`)
+- `moge_resolution_level` : MoGe detail level `[0-9]` (default `9`; lower is faster)
+- `moge_no_camera_fov` : let MoGe estimate FOV instead of using `camera_info` K
+- `publish_moge_depth` : publish MoGe depth as `16UC1` mm `image_raw` (requires `--depth_source moge`)
+- `moge_depth_topic` : MoGe depth topic (default `/foundation_pose/moge_depth/image_raw`)
+- `slop` : RGB–depth sync slop (RealSense path only)
 - `seg_model_type` : `yoloe` or `sam3` (open-vocab; prompt comes from the object preset)
 - `seg_model_name` : YOLOE weights e.g. `yoloe-26s-seg.pt` (ignored for sam3)
 - `yoloe_conf` : YOLOE confidence threshold (default `0.15`)
@@ -198,9 +247,10 @@ Per-object fields in `OBJECT_KEYS_TO_PARAMETERS` (not CLI): `symmetry_x/y/z_angl
 > [!WARNING]
 > When using --use_onnx by default the node will try to instantiate TensorRT engines. They will be saved in `foundationpose/weights/onnx/trt_cache`.
 > In `onnx_predictors.py` the variable `_TRT_SINGLE_ENGINE_FOR_ALL_BATCHES = False` controls how these engines are created. If `False` engine creation should take 
-> a few minutes at most, if `True` it could be much longer (creating a single engine for all batch sizes) but then you should be able to change objects including 
+> a from one to a few minutes (depending on the `batch_size` which is related to the number of hypothesis, the more symmetries the smaller the `batch_size`), if `True` it could be much longer (creating a single engine for all batch sizes) but then you should be able to change objects including 
 > objects with different symmetries without a new engine being created.
-> If you want to use ONNX-Runtime without TensorRT you can pass the flag `--no_prefer_tensorrt`
+> If you want to use ONNX-Runtime without TensorRT you can pass the flag `--no_prefer_tensorrt`.
+> Also note that creating the engine can take a lot VRAM.
 
 
 # Realsense camera driver

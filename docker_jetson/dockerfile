@@ -241,6 +241,10 @@ RUN pip install --no-cache-dir "${ONNXRUNTIME_GPU_WHL}" onnx && \
     if ldd "${TRT_EP}" | grep "not found"; then echo "TensorRT EP has unresolved libraries"; exit 1; fi && \
     python3 -c "import onnxruntime as ort; ps = ort.get_available_providers(); print('onnxruntime', ort.__version__, ps); assert 'TensorrtExecutionProvider' in ps"
 
+###### MoGe monocular depth (optional --depth_source moge in node.py)
+RUN pip install --no-cache-dir huggingface_hub \
+    "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183"
+
 ###### Ultralytics detectors (YOLOE / SAM3)
 # Blank pass so the pip installs and checkpoint downloads that ultralytics performs on
 # first use happen here instead of at node startup. Needs network access (`--network host`).

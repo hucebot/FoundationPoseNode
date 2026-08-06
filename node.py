@@ -8,26 +8,34 @@ Run from workspace: python run_demo_ros2.py
 
 Subscriptions:
   - /camera/color/image_raw/compressed (sensor_msgs/CompressedImage)
-  - /camera/depth/image_raw/compressed (sensor_msgs/CompressedImage)
+  - /camera/depth/image_raw/compressed (sensor_msgs/CompressedImage)  [depth_source=realsense]
   - /camera/color/camera_info (sensor_msgs/CameraInfo) for intrinsics K
   - /orchestrator/pose/toggle_fp (std_msgs/Bool) to enable/disable the node
   - /orchestrator/pose/toggle_tracking (std_msgs/Bool) to enable/disable pose tracking
   - /orchestrator/pose/target_object (std_msgs/String) to set the target object text prompt at runtime
 
+Depth source:
+  - realsense (default): synchronized RGB + RealSense depth
+  - moge: RGB only; metric depth from MoGe-2 (local ./moge + checkpoint)
+
 Publishes:
   - /foundation_pose/object_pose (geometry_msgs/PoseStamped)
   - /foundation_pose/object_marker (visualization_msgs/Marker) mesh marker at pose
   - /foundation_pose/mask_image (sensor_msgs/Image) optional debug mask overlay
+  - /foundation_pose/moge_depth/image_raw (sensor_msgs/Image 16UC1 mm) optional MoGe depth
 """
 
 import argparse
+import math
 import os
+import sys
 import time
 import threading
 from typing import Optional, Sequence
 
 import cv2
 import numpy as np
+import torch
 import rclpy
 from rclpy.node import Node
 from rclpy.logging import LoggingSeverity
@@ -44,6 +52,21 @@ from ultralytics import YOLOE
 from ultralytics.models.sam import SAM3SemanticPredictor
 
 from scipy.spatial.transform import Rotation
+
+
+def _fov_x_deg_from_K(K: np.ndarray, width: int) -> float:
+    """Horizontal FOV in degrees from intrinsics fx and image width."""
+    fx = float(K[0, 0])
+    return float(2.0 * math.degrees(math.atan(0.5 * width / fx)))
+
+
+def estimate_depth_moge(model, color_rgb: np.ndarray, fov_x: Optional[float] = None, resolution_level: int = 9) -> np.ndarray:
+    """Run MoGe-2 on an RGB uint8 image; return metric depth (H, W) float32 with invalids as 0."""
+    device = next(model.parameters()).device
+    image = torch.tensor(color_rgb / 255.0, dtype=torch.float32, device=device).permute(2, 0, 1)
+    output = model.infer(image, fov_x=fov_x, resolution_level=resolution_level)
+    depth = output["depth"].detach().float().cpu().numpy()
+    return np.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
 
 def decode_compressed_color(msg: CompressedImage) -> np.ndarray:
@@ -79,6 +102,12 @@ def _parse_angles_str(angles_str):
     if angles_str is None or angles_str == "":
         return None
     return [float(a) for a in angles_str.split(",")]
+
+
+def _biggest_mask_index(masks):
+    """Return the index of the mask with the most foreground pixels."""
+    return int(np.argmax([(m > 0).sum() for m in masks]))
+
 
 
 def symmetry_tfs_from_angles(x_angles_str=None, y_angles_str=None, z_angles_str=None):
@@ -255,9 +284,9 @@ OBJECT_KEYS_TO_PARAMETERS = {
     "juice" : { "mesh_file": "./assets/hackathon3/juice/juice.obj",
                 "symmetry_x_angles": "",
                 "symmetry_y_angles": "",
-                "symmetry_z_angles": "",
+                "symmetry_z_angles": "0,90,180,270",
                 "target_object": "carton bottle",
-                "constraint_yaw_in": [0,180],
+                "constraint_yaw_in": [0,90],
                 "constraint_pitch_in": None,
                 "constraint_roll_in": None},
     
@@ -297,6 +326,33 @@ OBJECT_KEYS_TO_PARAMETERS = {
               "constraint_pitch_in": None,
               "constraint_roll_in": None},
 
+    "multifruit" : { "mesh_file": "./assets/hackathon3/multifruit/multifruit.obj",
+                "symmetry_x_angles": "0,180",
+                "symmetry_y_angles": "0,180",
+                "symmetry_z_angles": "0,90,180,270",
+                "target_object": "carton bottle",
+                "constraint_yaw_in": [0,90],
+                "constraint_pitch_in": [0,180],
+                "constraint_roll_in": [0,180]},
+
+    "blackcup" : { "mesh_file": "./assets/hackathon3/blackcup/blackcup.obj",
+                "symmetry_x_angles": "",
+                "symmetry_y_angles": "",
+                "symmetry_z_angles": "",
+                "target_object": "black mug",
+                "constraint_yaw_in": None,
+                "constraint_pitch_in": None,
+                "constraint_roll_in": None},
+
+    "thermos" : { "mesh_file": "./assets/hackathon3/thermos/thermos.obj",
+                "symmetry_x_angles": "",
+                "symmetry_y_angles": "",
+                "symmetry_z_angles": "",
+                "target_object": "orange mug",
+                "constraint_yaw_in": None,
+                "constraint_pitch_in": None,
+                "constraint_roll_in": None},
+
     }
 class FoundationPoseROS2Node(Node):
     def __init__(self, args):
@@ -326,6 +382,7 @@ class FoundationPoseROS2Node(Node):
         self.declare_parameter("debug", args.debug)
         self.declare_parameter("debug_dir", args.debug_dir)
         self.declare_parameter("depth_scale", args.depth_scale)
+        self.declare_parameter("depth_source", args.depth_source)
         self.declare_parameter("color_topic", args.color_topic)
         self.declare_parameter("depth_topic", args.depth_topic)
         self.declare_parameter("camera_info_topic", args.camera_info_topic)
@@ -371,6 +428,7 @@ class FoundationPoseROS2Node(Node):
         self.track_refine_iter = self.get_parameter("track_refine_iter").value
         self.debug = self.get_parameter("debug").value
         self.depth_scale = self.get_parameter("depth_scale").value
+        self.depth_source = self.get_parameter("depth_source").value
         self.pose_frame_id = self.get_parameter("pose_frame_id").value
         self.slop = self.get_parameter("slop").value
         self.seg_model_name = args.seg_model_name
@@ -378,8 +436,11 @@ class FoundationPoseROS2Node(Node):
         self.min_initial_detection_counter = args.min_initial_detection_counter
         self.enable_pose_tracking = args.enable_pose_tracking
         self.publish_mask_image = args.publish_mask_image
+        self.publish_moge_depth = args.publish_moge_depth
+        self.moge_depth_topic = args.moge_depth_topic
         self.seg_model_type = args.seg_model_type
         self.yoloe_conf = args.yoloe_conf
+        self.multiple_object_method = args.multiple_object_method
         self.symmetry_x_angles = args.symmetry_x_angles
         self.symmetry_y_angles = args.symmetry_y_angles
         self.symmetry_z_angles = args.symmetry_z_angles
@@ -388,8 +449,18 @@ class FoundationPoseROS2Node(Node):
         self.refiner_onnx = args.refiner_onnx
         self.scorer_onnx = args.scorer_onnx
         self.prefer_tensorrt = not args.no_prefer_tensorrt
+        self.moge_checkpoint = args.moge_checkpoint
+        self.moge_resolution_level = args.moge_resolution_level
+        self.moge_use_camera_fov = args.moge_use_camera_fov
+        self.moge_model = None
         if self.fp_verbosity not in ["debug", "info", "warning", "error", "critical"]:
             raise ValueError(f"Invalid verbosity: {self.fp_verbosity}. Valid: debug, info, warning, error, critical")
+        if self.multiple_object_method not in ["none", "biggest"]:
+            raise ValueError(f"Invalid multiple_object_method: {self.multiple_object_method}. Valid: none, biggest")
+        if self.depth_source not in ["realsense", "moge"]:
+            raise ValueError(f"Invalid depth_source: {self.depth_source}. Valid: realsense, moge")
+        if self.publish_moge_depth and self.depth_source != "moge":
+            raise ValueError("--publish_moge_depth requires --depth_source moge")
 
         # Make some checks on the parameters
         assert(self.seg_model_type in ["sam3", "yoloe"]), f"Invalid segmentation model type: {self.seg_model_type}"
@@ -408,13 +479,16 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Debug: {self.debug}")
         self.get_logger().debug(f"Debug dir: {self.debug_dir}")
         self.get_logger().debug(f"Depth scale: {self.depth_scale}")
+        self.get_logger().debug(f"Depth source: {self.depth_source}")
         self.get_logger().debug(f"Pose frame id: {self.pose_frame_id}")
         self.get_logger().debug(f"Slop: {self.slop}")
         self.get_logger().debug(f"Resize factor: {self.resize_factor}")
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"YOLOE confidence threshold: {self.yoloe_conf}")
+        self.get_logger().debug(f"Multiple object method: {self.multiple_object_method}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
         self.get_logger().debug(f"Publish mask image: {self.publish_mask_image}")
+        self.get_logger().debug(f"Publish MoGe depth: {self.publish_moge_depth}")
         self.get_logger().debug(f"Symmetry x angles: {self.symmetry_x_angles}")
         self.get_logger().debug(f"Symmetry y angles: {self.symmetry_y_angles}")
         self.get_logger().debug(f"Symmetry z angles: {self.symmetry_z_angles}")
@@ -425,6 +499,10 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Prefer tensorrt: {self.prefer_tensorrt}")
         self.get_logger().debug(f"Refiner onnx: {self.refiner_onnx}")
         self.get_logger().debug(f"Scorer onnx: {self.scorer_onnx}")
+        if self.depth_source == "moge":
+            self.get_logger().debug(f"MoGe checkpoint: {self.moge_checkpoint}")
+            self.get_logger().debug(f"MoGe resolution level: {self.moge_resolution_level}")
+            self.get_logger().debug(f"MoGe use camera FOV: {self.moge_use_camera_fov}")
 
         self.K = None # to be set by camera info callback
         self.est = None # to be set by estimator initialization
@@ -523,6 +601,20 @@ class FoundationPoseROS2Node(Node):
         )
         self.get_logger().info("FoundationPose estimator initialized")
 
+        # Optional MoGe monocular depth (replaces RealSense depth)
+        if self.depth_source == "moge":
+            moge_root = os.path.join(code_dir, "moge")
+            if moge_root not in sys.path:
+                sys.path.insert(0, moge_root)
+            if not os.path.isfile(self.moge_checkpoint):
+                raise FileNotFoundError(f"MoGe checkpoint not found: {self.moge_checkpoint}")
+            self.get_logger().info(f"Loading MoGe-2 from {self.moge_checkpoint}...")
+            from moge.model.v2 import MoGeModel
+            self.moge_model = MoGeModel.from_pretrained(self.moge_checkpoint).cuda().eval()
+            self.get_logger().info(
+                f"MoGe-2 ready (resolution_level={self.moge_resolution_level}, use_camera_fov={self.moge_use_camera_fov})"
+            )
+
         # Update current phase
         self.current_phase = "Initialized"
 
@@ -589,6 +681,15 @@ class FoundationPoseROS2Node(Node):
                 qos_sensor,
             )
 
+        self._moge_depth_pub = None
+        if self.publish_moge_depth:
+            self._moge_depth_pub = self.create_publisher(
+                RosImage,
+                self.moge_depth_topic,
+                qos_sensor,
+            )
+            self.get_logger().info(f"Publishing MoGe depth (16UC1 mm) on {self.moge_depth_topic}")
+
         self._toggle_fp_sub = self.create_subscription(
             Bool,
             "/orchestrator/foundation_pose/toggle",
@@ -610,28 +711,39 @@ class FoundationPoseROS2Node(Node):
             qos_cmd,
         )
 
-        sub_color = Subscriber(
-            self,
-            CompressedImage,
-            self.get_parameter("color_topic").value,
-            qos_profile=qos_sensor,
-        )
-        sub_depth = Subscriber(
-            self,
-            CompressedImage,
-            self.get_parameter("depth_topic").value,
-            qos_profile=qos_sensor,
-        )
-        self._sync = ApproximateTimeSynchronizer(
-            [sub_color, sub_depth],
-            queue_size=100,
-            slop=self.slop,
-        )
-        self._sync.registerCallback(self._rgbd_cb)
-
-        self.get_logger().info(
-            f"Subscribed to {self.get_parameter('color_topic').value} and {self.get_parameter('depth_topic').value}; waiting for camera_info and RGBD messages"
-        )
+        if self.depth_source == "realsense":
+            sub_color = Subscriber(
+                self,
+                CompressedImage,
+                self.get_parameter("color_topic").value,
+                qos_profile=qos_sensor,
+            )
+            sub_depth = Subscriber(
+                self,
+                CompressedImage,
+                self.get_parameter("depth_topic").value,
+                qos_profile=qos_sensor,
+            )
+            self._sync = ApproximateTimeSynchronizer(
+                [sub_color, sub_depth],
+                queue_size=100,
+                slop=self.slop,
+            )
+            self._sync.registerCallback(self._rgbd_cb)
+            self.get_logger().info(
+                f"Subscribed to {self.get_parameter('color_topic').value} and {self.get_parameter('depth_topic').value}; waiting for camera_info and RGBD messages"
+            )
+        else:
+            # Color-only: MoGe predicts metric depth from RGB
+            self._color_sub = self.create_subscription(
+                CompressedImage,
+                self.get_parameter("color_topic").value,
+                self._color_cb,
+                qos_sensor,
+            )
+            self.get_logger().info(
+                f"Subscribed to {self.get_parameter('color_topic').value} (depth_source=moge); waiting for camera_info and color messages"
+            )
 
         self.current_phase = "WaitingForCameraInfo"
 
@@ -794,6 +906,27 @@ class FoundationPoseROS2Node(Node):
         )
         self._marker_pub.publish(marker)
 
+    def _publish_moge_depth_image(self, depth_m: np.ndarray, header, out_hw=None):
+        """Publish MoGe metric depth as RealSense-compatible 16UC1 image_raw (millimeters)."""
+        if self._moge_depth_pub is None:
+            return
+        depth = depth_m
+        if out_hw is not None and (depth.shape[0] != out_hw[0] or depth.shape[1] != out_hw[1]):
+            depth = cv2.resize(depth, (out_hw[1], out_hw[0]), interpolation=cv2.INTER_NEAREST)
+        # meters -> uint16 mm (same convention as RealSense + depth_scale=0.001)
+        depth_u16 = np.clip(np.round(depth / self.depth_scale), 0, 65535).astype(np.uint16)
+        depth_u16 = np.ascontiguousarray(depth_u16)
+        msg = RosImage()
+        msg.header.stamp = header.stamp
+        msg.header.frame_id = self.pose_frame_id
+        msg.height = int(depth_u16.shape[0])
+        msg.width = int(depth_u16.shape[1])
+        msg.encoding = "16UC1"
+        msg.is_bigendian = 0
+        msg.step = int(depth_u16.shape[1] * 2)
+        msg.data = depth_u16.tobytes()
+        self._moge_depth_pub.publish(msg)
+
     def _publish_mask_image(self, rgb, masks, header):
         """Overlay one color per mask on rgb (HxWx3) and publish as raw Image."""
         if self._mask_image_pub is None or masks is None or len(masks) == 0:
@@ -842,8 +975,12 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().info(f"Received camera intrinsics K: {self.K}")
         self.current_phase = "WaitingForRGBD"
 
-    def _rgbd_cb(self, color_msg: CompressedImage, depth_msg: CompressedImage):
-        self.get_logger().debug("Received RGBD message")
+    def _color_cb(self, color_msg: CompressedImage):
+        """RGB-only path when depth_source=moge."""
+        self._rgbd_cb(color_msg, None)
+
+    def _rgbd_cb(self, color_msg: CompressedImage, depth_msg: Optional[CompressedImage]):
+        self.get_logger().debug("Received RGBD message" if depth_msg is not None else "Received color message")
         self.rgbd_frames_counter_received += 1
         # Skip if camera intrinsics K not received yet
         if self.K is None:
@@ -872,37 +1009,71 @@ class FoundationPoseROS2Node(Node):
                 color = decode_compressed_color(color_msg)
             else:
                 color = color_msg.data
-            if "compressed" in self.get_parameter("depth_topic").value:
-                depth = decode_compressed_depth(depth_msg, self.depth_scale)
-            else:
-                depth = depth_msg.data
 
-            self.get_logger().debug(f"Got images with size: RGB {color.shape}, Depth {depth.shape}")
-
-            # Resize depth to match color image size
-            if color.shape[:2] != depth.shape[:2]:
-                depth = cv2.resize(
-                    depth,
-                    (color.shape[1], color.shape[0]),
-                    interpolation=cv2.INTER_NEAREST,
-                )
-                self.get_logger().debug(f"Resized depth to match color image size: RGB {color.shape}, Depth {depth.shape}")
-
-            if self.resize_factor != 1:
-                color = cv2.resize(
+            if self.depth_source == "moge":
+                # Keep full-res size for optional depth publish (match RealSense 16UC1 image_raw)
+                publish_hw = color.shape[:2]
+                # Run MoGe on the resolution FoundationPose will use
+                if self.resize_factor != 1:
+                    color = cv2.resize(
+                        color,
+                        (color.shape[1] // self.resize_factor, color.shape[0] // self.resize_factor),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                fov_x = _fov_x_deg_from_K(self.K, color.shape[1]) if self.moge_use_camera_fov else None
+                t0 = time.time()
+                depth = estimate_depth_moge(
+                    self.moge_model,
                     color,
-                    (color.shape[1] // self.resize_factor, color.shape[0] // self.resize_factor),
-                    interpolation=cv2.INTER_LINEAR,
+                    fov_x=fov_x,
+                    resolution_level=self.moge_resolution_level,
                 )
-                depth = cv2.resize(
-                    depth,
-                    (depth.shape[1] // self.resize_factor, depth.shape[0] // self.resize_factor),
-                    interpolation=cv2.INTER_NEAREST,
+                moge_ms = (time.time() - t0) * 1000.0
+                self.get_logger().debug(
+                    f"MoGe depth {depth.shape} in {moge_ms:.1f} ms (fov_x={fov_x})"
                 )
-                self.get_logger().debug(f"Resized RGBD image by factor {self.resize_factor} : RGB {color.shape}, Depth {depth.shape}")
+                if self.publish_moge_depth:
+                    self._publish_moge_depth_image(depth, color_msg.header, out_hw=publish_hw)
+            else:
+                if depth_msg is None:
+                    raise ValueError("depth_msg is required when depth_source=realsense")
+                if "compressed" in self.get_parameter("depth_topic").value:
+                    depth = decode_compressed_depth(depth_msg, self.depth_scale)
+                else:
+                    depth = depth_msg.data
+
+                self.get_logger().debug(f"Got images with size: RGB {color.shape}, Depth {depth.shape}")
+
+                # Resize depth to match color image size
+                if color.shape[:2] != depth.shape[:2]:
+                    depth = cv2.resize(
+                        depth,
+                        (color.shape[1], color.shape[0]),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                    self.get_logger().debug(f"Resized depth to match color image size: RGB {color.shape}, Depth {depth.shape}")
+
+                if self.resize_factor != 1:
+                    color = cv2.resize(
+                        color,
+                        (color.shape[1] // self.resize_factor, color.shape[0] // self.resize_factor),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                    depth = cv2.resize(
+                        depth,
+                        (depth.shape[1] // self.resize_factor, depth.shape[0] // self.resize_factor),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                    self.get_logger().debug(f"Resized RGBD image by factor {self.resize_factor} : RGB {color.shape}, Depth {depth.shape}")
 
         except ValueError as e:
             self.get_logger().error(str(e))
+            self._lock.acquire()
+            self._processing = False
+            self._lock.release()
+            return
+        except Exception as e:
+            self.get_logger().error(f"Failed to prepare RGBD: {e}")
             self._lock.acquire()
             self._processing = False
             self._lock.release()
@@ -960,8 +1131,18 @@ class FoundationPoseROS2Node(Node):
                     # print(f"target_mask.shape: {target_mask.shape}, dtype: {target_mask.dtype}, min: {target_mask.min()}, max: {target_mask.max()}")
                     self.get_logger().debug(f"Initial detection counter ({self.target_object}): {self.initial_detection_counter} / {self.min_initial_detection_counter}")
                 elif found_obects > 1:
-                    self.get_logger().warn(f"Multiple objects found ({found_obects}) in frame {self.rgbd_frames_counter_processed}, cannot chose")
-                    self.initial_detection_counter = 0
+                    if self.multiple_object_method == "biggest":
+                        masks_np = [target_masks[i].data.cpu().numpy()[0] for i in range(found_obects)]
+                        best_idx = _biggest_mask_index(masks_np)
+                        target_mask = masks_np[best_idx].astype(np.uint8)
+                        self.initial_detection_counter = self.min_initial_detection_counter
+                        self.get_logger().info(
+                            f"Multiple objects ({found_obects}); selected biggest mask idx={best_idx} "
+                            f"({int((target_mask > 0).sum())} px)"
+                        )
+                    else:
+                        self.get_logger().warn(f"Multiple objects found ({found_obects}) in frame {self.rgbd_frames_counter_processed}, cannot chose")
+                        self.initial_detection_counter = 0
                 else:
                     self.initial_detection_counter = 0
 
@@ -989,8 +1170,18 @@ class FoundationPoseROS2Node(Node):
                     self.initial_detection_counter += 1
                     self.get_logger().info(f"Initial detection counter ({self.target_object}): {self.initial_detection_counter} / {self.min_initial_detection_counter}")
                 elif found_object > 1:
-                    self.get_logger().warn(f"Multiple objects found ({found_object}) in frame {self.rgbd_frames_counter_processed}, cannot chose")
-                    self.initial_detection_counter = 0
+                    if self.multiple_object_method == "biggest":
+                        best_idx = _biggest_mask_index(target_masks_list)
+                        target_mask = target_masks_list[best_idx]
+                        self.initial_detection_counter += 1
+                        self.get_logger().info(
+                            f"Multiple objects ({found_object}); selected biggest mask idx={best_idx} "
+                            f"({int((target_mask > 0).sum())} px), "
+                            f"detection counter: {self.initial_detection_counter} / {self.min_initial_detection_counter}"
+                        )
+                    else:
+                        self.get_logger().warn(f"Multiple objects found ({found_object}) in frame {self.rgbd_frames_counter_processed}, cannot chose")
+                        self.initial_detection_counter = 0
                 else:
                     # set or reset to 0 if not found
                     self.initial_detection_counter = 0
@@ -1164,11 +1355,18 @@ if __name__ == "__main__":
     parser.add_argument("--debug", type=int, default=1, help="Debug level.")
     parser.add_argument("--debug_dir", type=str, default="", help="Debug directory.")
     parser.add_argument("--depth_scale", type=float, default=0.001, help="Depth scale.")
+    parser.add_argument("--depth_source", type=str, default="realsense", choices=["realsense", "moge"], help="Depth source: RealSense topic or MoGe monocular depth.")
+    parser.add_argument("--moge_checkpoint", type=str, default="./moge2_vitb_normal.pt", help="Path to MoGe-2 checkpoint (.pt).")
+    parser.add_argument("--moge_resolution_level", type=int, default=9, help="MoGe resolution level [0-9]; higher is slower/finer.")
+    parser.add_argument("--moge_no_camera_fov", action="store_true", default=False, help="Let MoGe estimate FOV instead of using camera_info K (default: pass FOV from K).")
+    parser.add_argument("--publish_moge_depth", action="store_true", default=False, help="Publish MoGe depth as sensor_msgs/Image 16UC1 (mm), matching RealSense image_raw.")
+    parser.add_argument("--moge_depth_topic", type=str, default="/foundation_pose/moge_depth/image_raw", help="Topic for published MoGe depth image_raw.")
     parser.add_argument("--camera_name", type=str, default="realsense_head_front", help="Camera name.")
     parser.add_argument("--slop", type=float, default=1.0, help="Slop.")
     parser.add_argument("--seg_model_type", type=str, default="yoloe", choices=["yoloe", "sam3"], help="Segmentation model type, both are open vocabulary.")
     parser.add_argument("--seg_model_name", type=str, default="yoloe-26s-seg.pt", help="Segmentation model name (ignored for sam3).")
     parser.add_argument("--yoloe_conf", type=float, default=0.15, help="Confidence threshold for the YOLOE detections.")
+    parser.add_argument("--multiple_object_method", type=str, default="none", choices=["none", "biggest"], help="When multiple objects are detected: 'none' skips the frame, 'biggest' keeps the mask with the most pixels.")
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=1, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
@@ -1180,6 +1378,7 @@ if __name__ == "__main__":
     parser.add_argument("--scorer_onnx", type=str, default="", help="Optional path to score_net.onnx.")
     parser.add_argument("--no_prefer_tensorrt", action="store_true", default=False, help="Disable TensorRT EP when using ONNX predictors.")
     args = parser.parse_args()
+    args.moge_use_camera_fov = not args.moge_no_camera_fov
 
     # Set parameters based on the object key
     args.mesh_file = OBJECT_KEYS_TO_PARAMETERS[args.object_key]["mesh_file"]
@@ -1191,8 +1390,13 @@ if __name__ == "__main__":
     # Set the parameters based on the camera name
     args.color_topic = f"/rgbd/{args.camera_name}/color/image_raw/compressed"
     args.depth_topic = f"/rgbd/{args.camera_name}/aligned_depth_to_color/image_raw/compressedDepth"
-    args.camera_info_topic = f"/rgbd/{args.camera_name}/aligned_depth_to_color/camera_info"
-    args.pose_frame_id = f"{args.camera_name}_depth_optical_frame"
+    if args.depth_source == "moge":
+        # Color optical frame / color camera_info (no RealSense depth stream required)
+        args.camera_info_topic = f"/rgbd/{args.camera_name}/color/camera_info"
+        args.pose_frame_id = f"{args.camera_name}_color_optical_frame"
+    else:
+        args.camera_info_topic = f"/rgbd/{args.camera_name}/aligned_depth_to_color/camera_info"
+        args.pose_frame_id = f"{args.camera_name}_depth_optical_frame"
 
     main(args)
 
