@@ -270,7 +270,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                     "constraint_pitch_in": None,
                     "constraint_roll_in": None},
 
-    "juice" : { "mesh_file": "./assets/hackathon2/juice/juice.obj",
+    "juice" : { "mesh_file": "./assets/hackathon3/juice/juice.obj",
                 "symmetry_x_angles": "",
                 "symmetry_y_angles": "",
                 "symmetry_z_angles": "",
