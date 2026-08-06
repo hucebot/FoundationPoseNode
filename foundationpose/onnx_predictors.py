@@ -94,10 +94,18 @@ def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
             )
         )
     elif prefer_tensorrt and "TensorrtExecutionProvider" in available and not has_trt_runtime:
-        raise RuntimeError("TensorRT runtime libraries are missing in this container. Use --no_prefer_tensorrt to use CUDAExecutionProvider instead.")
+        logging.warning(
+            "TensorRT EP is available in onnxruntime, but TensorRT runtime libraries "
+            "were not found; falling back to CUDAExecutionProvider. "
+            "Pass --no_prefer_tensorrt to silence this."
+        )
     elif prefer_tensorrt and "TensorrtExecutionProvider" not in available:
-        raise RuntimeError("TensorRT execution provider is not available. Use --no_prefer_tensorrt to use CUDAExecutionProvider instead.")
-    
+        logging.warning(
+            "TensorrtExecutionProvider is not built into this onnxruntime wheel; "
+            "falling back to CUDAExecutionProvider. "
+            "Pass --no_prefer_tensorrt to silence this."
+        )
+
     if "CUDAExecutionProvider" in available:
         providers.append(
             (

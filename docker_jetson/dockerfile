@@ -183,11 +183,11 @@ RUN ln -sf /bin/bash /bin/sh
 ###### TensorRT + ONNX Runtime for FoundationPose ONNX on Jetson / Thor
 # Appended last to preserve the build cache of the large layers above.
 #
-# TensorRT itself is available from NVIDIA's apt repos on Jetson/Thor, but upstream
-# PyPI still does not ship official aarch64 `onnxruntime-gpu` wheels with CUDA/TRT.
-# So we install TensorRT system libs first, then build an ORT wheel from source with
-# `--use_cuda --use_tensorrt`. This is slow, but it keeps the Dockerfile self-contained
-# and makes `node.py --use_onnx` usable on Jetson after the rebuild.
+# Upstream PyPI has no aarch64 onnxruntime-gpu wheel. Building ORT from source with
+# TensorRT on Thor/JP7.2 is very slow and currently fails near the end of the link
+# step, so we install TensorRT system libs + a prebuilt JetPack 7.2 aarch64 wheel
+# (Ultralytics / Jetson Zoo path for Python 3.12). That wheel typically exposes
+# CUDAExecutionProvider; TensorRT EP may be absent — onnx_predictors falls back to CUDA.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tensorrt \
     libnvinfer-bin \
@@ -195,24 +195,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnvinfer-plugin-dev \
     libnvonnxparsers-dev \
     python3-libnvinfer-dev \
-    libopenblas-dev \
-    libssl-dev \
-    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Keep TensorRT libs on the default loader path for Python / ONNX Runtime.
 ENV LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}
 RUN echo "export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:\$LD_LIBRARY_PATH" >> ~/.bashrc
 
-ARG ONNXRUNTIME_BRANCH=v1.25.0
-ARG ONNXRUNTIME_PARALLEL=4
-RUN git clone --recursive https://github.com/microsoft/onnxruntime /opt/onnxruntime && \
-    cd /opt/onnxruntime && \
-    git checkout ${ONNXRUNTIME_BRANCH} && \
-    git submodule update --init --recursive && \
-    ./build.sh --config Release --update --build --parallel ${ONNXRUNTIME_PARALLEL} \
-      --skip_tests --build_wheel --allow_running_as_root --use_cuda \
-      --cuda_home /usr/local/cuda --cudnn_home /usr/lib/aarch64-linux-gnu \
-      --use_tensorrt --tensorrt_home /usr/lib/aarch64-linux-gnu \
-      --cmake_extra_defines CMAKE_CUDA_ARCHITECTURES=110 onnxruntime_BUILD_UNIT_TESTS=OFF && \
-    pip install /opt/onnxruntime/build/Linux/Release/dist/onnxruntime_gpu-*.whl onnx
+# JetPack 7.2 / Python 3.12 aarch64 wheel (see Ultralytics Jetson guide).
+ARG ONNXRUNTIME_GPU_WHL=https://github.com/ultralytics/assets/releases/download/v0.0.0/onnxruntime_gpu-1.24.0-cp312-cp312-linux_aarch64.whl
+RUN pip install --no-cache-dir "${ONNXRUNTIME_GPU_WHL}" onnx && \
+    python3 -c "import onnxruntime as ort; print('onnxruntime', ort.__version__, ort.get_available_providers())"

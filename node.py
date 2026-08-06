@@ -17,6 +17,7 @@ Subscriptions:
 Publishes:
   - /foundation_pose/object_pose (geometry_msgs/PoseStamped)
   - /foundation_pose/object_marker (visualization_msgs/Marker) mesh marker at pose
+  - /foundation_pose/mask_image/compressed (sensor_msgs/CompressedImage) optional debug mask overlay
 """
 
 import argparse
@@ -357,6 +358,7 @@ class FoundationPoseROS2Node(Node):
         self.resize_factor = args.resize_factor
         self.min_initial_detection_counter = args.min_initial_detection_counter
         self.enable_pose_tracking = args.enable_pose_tracking
+        self.publish_mask_image = args.publish_mask_image
         self.seg_model_type = args.seg_model_type
         self.symmetry_x_angles = args.symmetry_x_angles
         self.symmetry_y_angles = args.symmetry_y_angles
@@ -395,6 +397,7 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Resize factor: {self.resize_factor}")
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
+        self.get_logger().debug(f"Publish mask image: {self.publish_mask_image}")
         self.get_logger().debug(f"Symmetry x angles: {self.symmetry_x_angles}")
         self.get_logger().debug(f"Symmetry y angles: {self.symmetry_y_angles}")
         self.get_logger().debug(f"Symmetry z angles: {self.symmetry_z_angles}")
@@ -556,6 +559,14 @@ class FoundationPoseROS2Node(Node):
             "/foundation_pose/mesh_status",
             qos_state,
         )
+
+        self._mask_image_pub = None
+        if self.publish_mask_image:
+            self._mask_image_pub = self.create_publisher(
+                CompressedImage,
+                "/foundation_pose/mask_image/compressed",
+                qos_sensor,
+            )
 
         self._toggle_fp_sub = self.create_subscription(
             Bool,
@@ -763,6 +774,37 @@ class FoundationPoseROS2Node(Node):
         )
         self._marker_pub.publish(marker)
 
+    def _publish_mask_image(self, rgb, masks, header):
+        """Overlay one color per mask on rgb (HxWx3) and publish as compressed JPEG."""
+        if self._mask_image_pub is None or masks is None or len(masks) == 0:
+            return
+        vis = rgb.copy()
+        colors = [
+            (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
+            (255, 0, 255), (0, 255, 255), (255, 128, 0), (128, 0, 255),
+        ]
+        for i, mask in enumerate(masks):
+            m = np.asarray(mask)
+            if m.ndim == 3:
+                m = m[0]
+            if m.shape[:2] != vis.shape[:2]:
+                m = cv2.resize(m.astype(np.uint8), (vis.shape[1], vis.shape[0]), interpolation=cv2.INTER_NEAREST)
+            sel = m.astype(bool)
+            if not sel.any():
+                continue
+            color = np.array(colors[i % len(colors)], dtype=np.float32)
+            vis[sel] = (0.45 * vis[sel].astype(np.float32) + 0.55 * color).astype(np.uint8)
+
+        ok, buf = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
+        if not ok:
+            self.get_logger().warn("Failed to encode mask debug image")
+            return
+        msg = CompressedImage()
+        msg.header = header
+        msg.format = "jpeg"
+        msg.data = buf.tobytes()
+        self._mask_image_pub.publish(msg)
+
     def _camera_info_cb(self, msg: CameraInfo):
         if self.K is not None:
             return
@@ -884,6 +926,9 @@ class FoundationPoseROS2Node(Node):
                     return
 
                 found_obects = len(target_masks)
+                if self.publish_mask_image and found_obects > 0:
+                    masks_list = [target_masks[i].data.cpu().numpy()[0] for i in range(found_obects)]
+                    self._publish_mask_image(color, masks_list, color_msg.header)
                 if found_obects == 1:
                     self.initial_detection_counter = self.min_initial_detection_counter # directly set to min_initial_detection_counter to start tracking
                     target_mask = target_masks[0].data.cpu().numpy()
@@ -901,6 +946,7 @@ class FoundationPoseROS2Node(Node):
                 # perform detection or initial pose estimation
                 target_mask = None
                 found_object = 0
+                target_masks_list = []
                 results = self.seg_model.track(
                     color,
                     verbose=False,
@@ -922,6 +968,10 @@ class FoundationPoseROS2Node(Node):
                         if cls_name == self.target_object:
                             target_mask = mask
                             found_object += 1
+                            target_masks_list.append(mask)
+
+                if self.publish_mask_image and target_masks_list:
+                    self._publish_mask_image(color, target_masks_list, color_msg.header)
 
                 if found_object == 1:
                     # need min_initial_detection_counter detections in a row to start tracking
@@ -1110,6 +1160,7 @@ if __name__ == "__main__":
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
+    parser.add_argument("--publish_mask_image", action="store_true", default=False, help="Publish compressed RGB with colored detection masks for RViz debug.")
     parser.add_argument("--fp_verbosity", type=str, default="warning", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     parser.add_argument("--ros_verbosity", type=str, default="info", help="ROS logger severity (debug/info/warn/error/fatal). Defaults to RCUTILS_LOGGING_SEVERITY or INFO.")
     parser.add_argument("--use_onnx", action="store_true", default=False, help="Use ONNX predictors instead of the default scorer and refiner.")
