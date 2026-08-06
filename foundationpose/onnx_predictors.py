@@ -67,6 +67,10 @@ _SCORE_CFG = {
     "n_view": 1,
 }
 
+# Both nets take [B, c_in, H, W]; only B varies (1 while tracking, len(rot_grid) on
+# register, so 22 / 37 / 126 / 252 depending on the object's symmetry pruning).
+_NET_INPUT_CHW = "x".join(str(d) for d in (_REFINE_CFG["c_in"], *_REFINE_CFG["input_resize"]))
+
 
 # The onnxruntime-gpu builds we use link their TensorRT EP against the 10.x SONAME.
 # NVIDIA's CUDA 13 apt repos also carry TensorRT 11 (libnvinfer.so.11), which looks like
@@ -74,12 +78,29 @@ _SCORE_CFG = {
 _TRT_MAJOR = "10"
 _NVINFER_SONAME = f"libnvinfer.so.{_TRT_MAJOR}"
 
+# A first inference slower than this is an engine build rather than normal warm-up.
+_SLOW_FIRST_RUN_S = 5.0
 
-def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
+# Two ways to handle the varying batch size (1 while tracking, len(rot_grid) on register):
+#   True  - declare one TensorRT profile spanning 1..infer_batch_size, so a single engine
+#           serves every object. No rebuild on mesh updates, but the builder must find
+#           tactics valid across the whole range, which makes that one build much slower.
+#   False - let the TRT EP derive the shape from the incoming tensor, giving a separate
+#           engine per batch size: each build is fast, but a new object whose rotation grid
+#           has a size not built yet stalls registration while its engine is created.
+_TRT_SINGLE_ENGINE_FOR_ALL_BATCHES = True
+
+
+def _default_ort_providers(
+    prefer_tensorrt: bool = True,
+    input_names: Optional[Sequence[str]] = None,
+    max_batch: int = 0,
+) -> list:
     """Pick ORT execution providers.
 
     If prefer_tensorrt is True, TensorRT must be usable or this raises.
     If prefer_tensorrt is False, use CUDA then CPU.
+    input_names / max_batch declare the TensorRT shape profile (see below).
     """
     import onnxruntime as ort
 
@@ -103,16 +124,27 @@ def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
                 f"TensorRT {_TRT_MAJOR}.x runtime, or use --no_prefer_tensorrt for "
                 "CUDAExecutionProvider."
             )
-        providers.append(
-            (
-                "TensorrtExecutionProvider",
-                {
-                    "trt_fp16_enable": True,
-                    "trt_engine_cache_enable": True,
-                    "trt_engine_cache_path": os.path.join(DEFAULT_ONNX_DIR, "trt_cache"),
-                },
+        trt_cache = os.path.join(DEFAULT_ONNX_DIR, "trt_cache")
+        trt_options = {
+            "trt_fp16_enable": True,
+            "trt_engine_cache_enable": True,
+            "trt_engine_cache_path": trt_cache,
+            # Reuses kernel timings across builds, so the builds that do happen are faster.
+            "trt_timing_cache_enable": True,
+            "trt_timing_cache_path": trt_cache,
+            # Engine builds are rare but multi-minute and otherwise silent; this reports
+            # the per-build timing so a stall can be told apart from a hang.
+            "trt_detailed_build_log": True,
+        }
+        if _TRT_SINGLE_ENGINE_FOR_ALL_BATCHES and input_names and max_batch > 0:
+            trt_options["trt_profile_min_shapes"] = ",".join(
+                f"{name}:1x{_NET_INPUT_CHW}" for name in input_names
             )
-        )
+            # Registration is the expensive path, so tune for the full batch.
+            full_batch = ",".join(f"{name}:{max_batch}x{_NET_INPUT_CHW}" for name in input_names)
+            trt_options["trt_profile_opt_shapes"] = full_batch
+            trt_options["trt_profile_max_shapes"] = full_batch
+        providers.append(("TensorrtExecutionProvider", trt_options))
 
     if "CUDAExecutionProvider" in available:
         providers.append(
@@ -207,6 +239,7 @@ class OnnxSession:
         output_names: Sequence[str],
         providers: Optional[list] = None,
         prefer_tensorrt: bool = True,
+        max_batch: int = 0,
     ):
         import onnxruntime as ort
 
@@ -223,8 +256,13 @@ class OnnxSession:
         self.onnx_path = onnx_path
         self.input_names = list(input_names)
         self.output_names = list(output_names)
+        self._timed_batches: set = set()
         if providers is None:
-            providers = _default_ort_providers(prefer_tensorrt=prefer_tensorrt)
+            providers = _default_ort_providers(
+                prefer_tensorrt=prefer_tensorrt,
+                input_names=self.input_names,
+                max_batch=max_batch,
+            )
         os.makedirs(os.path.join(DEFAULT_ONNX_DIR, "trt_cache"), exist_ok=True)
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -252,7 +290,24 @@ class OnnxSession:
             if t.dtype != torch.float32:
                 t = t.float()
             feeds[name] = t.detach().contiguous().cpu().numpy()
+
+        # A TensorRT engine build happens on the first run of a batch size and takes
+        # minutes with no output of its own, so time each batch size once and report it
+        # at WARNING (the default level for the root logger, unlike info() above).
+        batch = next(iter(feeds.values())).shape[0]
+        timing_first_run = batch not in self._timed_batches
+        t0 = time.time() if timing_first_run else 0.0
+
         outs = self.session.run(self.output_names, feeds)
+
+        if timing_first_run:
+            self._timed_batches.add(batch)
+            elapsed = time.time() - t0
+            if elapsed > _SLOW_FIRST_RUN_S:
+                logging.warning(
+                    f"{os.path.basename(self.onnx_path)}: first run at batch {batch} took "
+                    f"{elapsed:.1f}s, most likely a TensorRT engine build"
+                )
         return [torch.as_tensor(o, device="cuda", dtype=torch.float32) for o in outs]
 
 
@@ -275,6 +330,7 @@ class PoseRefinePredictorOnnx:
             output_names=["trans", "rot"],
             providers=providers,
             prefer_tensorrt=prefer_tensorrt,
+            max_batch=int(infer_batch_size),
         )
         self.infer_batch_size = int(infer_batch_size)
         self.last_trans_update = None
@@ -398,6 +454,7 @@ class ScorePredictorOnnx:
             output_names=["score_logit"],
             providers=providers,
             prefer_tensorrt=prefer_tensorrt,
+            max_batch=int(infer_batch_size),
         )
         self.infer_batch_size = int(infer_batch_size)
         self.model = self
