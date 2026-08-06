@@ -28,6 +28,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.logging import LoggingSeverity
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, CameraInfo
 from geometry_msgs.msg import PoseStamped
@@ -279,6 +280,21 @@ OBJECT_KEYS_TO_PARAMETERS = {
 class FoundationPoseROS2Node(Node):
     def __init__(self, args):
         super().__init__("foundation_pose_node")
+
+        # RCUTILS_LOGGING_SEVERITY alone is unreliable for node loggers when using
+        # python node.py (rclpy.init gets no --ros-args). Set level explicitly.
+        ros_verbosity = (args.ros_verbosity or os.environ.get("RCUTILS_LOGGING_SEVERITY") or "INFO").upper()
+        severity_map = {
+            "DEBUG": LoggingSeverity.DEBUG,
+            "INFO": LoggingSeverity.INFO,
+            "WARN": LoggingSeverity.WARN,
+            "WARNING": LoggingSeverity.WARN,
+            "ERROR": LoggingSeverity.ERROR,
+            "FATAL": LoggingSeverity.FATAL,
+        }
+        if ros_verbosity not in severity_map:
+            raise ValueError(f"Invalid ros_verbosity: {ros_verbosity}. Valid: {list(severity_map)}")
+        self.get_logger().set_level(severity_map[ros_verbosity])
 
         # Declare ROS parameters
         self.declare_parameter("object_key", args.object_key)
@@ -1077,7 +1093,8 @@ if __name__ == "__main__":
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
-    parser.add_argument("--fp_verbosity", type=str, default="info", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
+    parser.add_argument("--fp_verbosity", type=str, default="warning", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
+    parser.add_argument("--ros_verbosity", type=str, default="info", help="ROS logger severity (debug/info/warn/error/fatal). Defaults to RCUTILS_LOGGING_SEVERITY or INFO.")
     parser.add_argument("--use_onnx", action="store_true", default=False, help="Use ONNX predictors instead of the default scorer and refiner.")
     parser.add_argument("--refiner_onnx", type=str, default="", help="Optional path to refiner_net.onnx.")
     parser.add_argument("--scorer_onnx", type=str, default="", help="Optional path to score_net.onnx.")

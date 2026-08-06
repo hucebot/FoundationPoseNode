@@ -186,7 +186,7 @@ class FoundationPose:
     set_seed(0)
     logging.info('Welcome')
     
-    if ros_logger is not None:
+    if ros_logger is None:
       ros_logger = logging
 
     if self.glctx is None:
@@ -286,9 +286,9 @@ class FoundationPose:
 
 
   def track_one(self, rgb, depth, K, iteration, extra={}, ros_logger=None):
-    if ros_logger is not None:
+    if ros_logger is None:
       ros_logger = logging
-      
+
     if self.pose_last is None:
       logging.info("Please init pose by register first")
       raise RuntimeError

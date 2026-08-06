@@ -110,13 +110,13 @@ Ultralytics will usually download the chosen checkpoint (e.g. `yolo26n-seg.pt`) 
 ## Run
 ```
 bash ./docker/run_container.sh 
-python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --fp_verbosity warning
+python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --ros_verbosity info 
 ```
 
 ### ONNX node (TAO refine/score)
 Same arguments as `node.py`, plus `--use_onnx` so refine/score use the NGC ONNX models via ONNX Runtime:
 ```
-python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --fp_verbosity warning
+python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --ros_verbosity info 
 ```
 
 ### Offline ONNX benchmark (no ROS)
