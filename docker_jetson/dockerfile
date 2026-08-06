@@ -186,15 +186,17 @@ RUN ln -sf /bin/bash /bin/sh
 # Upstream PyPI has no aarch64 onnxruntime-gpu wheel. Building ORT from source with
 # TensorRT on Thor/JP7.2 is very slow and currently fails near the end of the link
 # step, so we install TensorRT system libs + a prebuilt JetPack 7.2 aarch64 wheel
-# (Ultralytics / Jetson Zoo path for Python 3.12). That wheel typically exposes
-# CUDAExecutionProvider; TensorRT EP may be absent — onnx_predictors falls back to CUDA.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    tensorrt \
-    libnvinfer-bin \
-    libnvinfer-dev \
-    libnvinfer-plugin-dev \
-    libnvonnxparsers-dev \
-    python3-libnvinfer-dev \
+# (Ultralytics / Jetson Zoo path for Python 3.12).
+#
+# The version must be pinned: the sbsa CUDA repo now also carries TensorRT 11, which an
+# unpinned `apt install tensorrt` picks up. TensorRT 11 only provides libnvinfer.so.11,
+# while the ONNX Runtime wheel's TensorRT EP is linked against libnvinfer.so.10, so the
+# EP fails to dlopen and ORT silently falls back to CPU. 10.16.1 is the closest 10.x in
+# this repo to the TensorRT 10.16.2 that JetPack 7.2 ships on the host.
+ARG TENSORRT_VERSION=10.16.1.11-1+cuda13.2
+RUN apt-get update && apt-get install -y --no-install-recommends --allow-downgrades \
+    tensorrt=${TENSORRT_VERSION} \
+    && ldconfig \
     && rm -rf /var/lib/apt/lists/*
 
 # Keep TensorRT libs on the default loader path for Python / ONNX Runtime.
@@ -203,5 +205,9 @@ RUN echo "export LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:\$LD_LIBRARY_PATH" >
 
 # JetPack 7.2 / Python 3.12 aarch64 wheel (see Ultralytics Jetson guide).
 ARG ONNXRUNTIME_GPU_WHL=https://github.com/ultralytics/assets/releases/download/v0.0.0/onnxruntime_gpu-1.24.0-cp312-cp312-linux_aarch64.whl
+# get_available_providers() only lists the EPs compiled into the wheel, so the ldd check
+# is what actually catches a TensorRT runtime that the EP cannot link against.
 RUN pip install --no-cache-dir "${ONNXRUNTIME_GPU_WHL}" onnx && \
-    python3 -c "import onnxruntime as ort; print('onnxruntime', ort.__version__, ort.get_available_providers())"
+    TRT_EP="$(python3 -c 'import os, onnxruntime; print(os.path.dirname(onnxruntime.__file__))')/capi/libonnxruntime_providers_tensorrt.so" && \
+    if ldd "${TRT_EP}" | grep "not found"; then echo "TensorRT EP has unresolved libraries"; exit 1; fi && \
+    python3 -c "import onnxruntime as ort; ps = ort.get_available_providers(); print('onnxruntime', ort.__version__, ps); assert 'TensorrtExecutionProvider' in ps"

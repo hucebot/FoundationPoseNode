@@ -68,6 +68,13 @@ _SCORE_CFG = {
 }
 
 
+# The onnxruntime-gpu builds we use link their TensorRT EP against the 10.x SONAME.
+# NVIDIA's CUDA 13 apt repos also carry TensorRT 11 (libnvinfer.so.11), which looks like
+# a valid install but cannot satisfy that link, so the major version is checked exactly.
+_TRT_MAJOR = "10"
+_NVINFER_SONAME = f"libnvinfer.so.{_TRT_MAJOR}"
+
+
 def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
     """Pick ORT execution providers.
 
@@ -88,10 +95,13 @@ def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
             )
         trt_lib_dir = _find_tensorrt_lib_dir()
         if not _try_load_tensorrt_runtime(trt_lib_dir):
+            present = _installed_nvinfer_libs()
             raise RuntimeError(
-                "TensorRT was requested, but libnvinfer could not be loaded "
-                f"(searched dir={trt_lib_dir!r}). Install TensorRT runtime libs "
-                "or use --no_prefer_tensorrt for CUDAExecutionProvider."
+                f"TensorRT was requested, but {_NVINFER_SONAME} (the SONAME this "
+                "onnxruntime build links against) could not be loaded. libnvinfer "
+                f"libraries found on this system: {present or 'none'}. Install the "
+                f"TensorRT {_TRT_MAJOR}.x runtime, or use --no_prefer_tensorrt for "
+                "CUDAExecutionProvider."
             )
         providers.append(
             (
@@ -115,8 +125,8 @@ def _default_ort_providers(prefer_tensorrt: bool = True) -> list:
     return providers
 
 
-def _find_tensorrt_lib_dir() -> Optional[str]:
-    """Locate pip or system TensorRT shared-library directory (or None)."""
+def _tensorrt_lib_dirs() -> list:
+    """List existing directories that may hold the TensorRT runtime (pip or system)."""
     candidates = []
 
     try:
@@ -144,51 +154,47 @@ def _find_tensorrt_lib_dir() -> Optional[str]:
     if found and os.path.isabs(found):
         candidates.insert(0, os.path.dirname(found))
 
-    for directory in candidates:
-        if not directory or not os.path.isdir(directory):
-            continue
-        if os.path.isfile(os.path.join(directory, "libnvinfer.so.10")):
-            return directory
-        if glob.glob(os.path.join(directory, "libnvinfer.so*")):
+    return [d for d in dict.fromkeys(candidates) if d and os.path.isdir(d)]
+
+
+def _find_tensorrt_lib_dir() -> Optional[str]:
+    """Return the first directory holding the exact SONAME onnxruntime needs (or None)."""
+    for directory in _tensorrt_lib_dirs():
+        if os.path.isfile(os.path.join(directory, _NVINFER_SONAME)):
             return directory
     return None
 
 
+def _installed_nvinfer_libs() -> list:
+    """List every libnvinfer.so* present, so a major-version mismatch is visible."""
+    libs = []
+    for directory in _tensorrt_lib_dirs():
+        libs.extend(sorted(glob.glob(os.path.join(directory, "libnvinfer.so*"))))
+    return libs
+
+
 def _try_load_tensorrt_runtime(trt_lib_dir: Optional[str]) -> bool:
-    """Return True only if libnvinfer can be loaded into this process."""
-    lib_candidates = []
-    if trt_lib_dir:
-        os.environ["LD_LIBRARY_PATH"] = f"{trt_lib_dir}:{os.environ.get('LD_LIBRARY_PATH', '')}"
-        for name in ("libnvinfer.so.10", "libnvinfer.so"):
-            path = os.path.join(trt_lib_dir, name)
-            if os.path.isfile(path):
-                lib_candidates.append(path)
-        lib_candidates.extend(sorted(glob.glob(os.path.join(trt_lib_dir, "libnvinfer.so*"))))
+    """Return True only if the expected libnvinfer SONAME loads into this process.
 
-    found = ctypes.util.find_library("nvinfer")
-    if found:
-        lib_candidates.append(found)
+    Loading it with RTLD_GLOBAL puts it on the link map, so onnxruntime's later dlopen
+    of libonnxruntime_providers_tensorrt.so resolves against it without LD_LIBRARY_PATH.
+    """
+    if not trt_lib_dir:
+        return False
+    try:
+        ctypes.CDLL(os.path.join(trt_lib_dir, _NVINFER_SONAME), mode=ctypes.RTLD_GLOBAL)
+    except OSError as e:
+        logging.debug(f"Could not load {_NVINFER_SONAME} from {trt_lib_dir}: {e}")
+        return False
 
-    seen = set()
-    for lib_path in lib_candidates:
-        if not lib_path or lib_path in seen:
-            continue
-        seen.add(lib_path)
-        try:
-            ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
-            # Also try companion libs when we know the directory.
-            if trt_lib_dir:
-                for extra in ("libnvinfer_plugin.so.10", "libnvonnxparser.so.10"):
-                    extra_path = os.path.join(trt_lib_dir, extra)
-                    if os.path.isfile(extra_path):
-                        try:
-                            ctypes.CDLL(extra_path, mode=ctypes.RTLD_GLOBAL)
-                        except OSError:
-                            pass
-            return True
-        except OSError as e:
-            logging.debug(f"Could not load TensorRT lib {lib_path}: {e}")
-    return False
+    for extra in (f"libnvinfer_plugin.so.{_TRT_MAJOR}", f"libnvonnxparser.so.{_TRT_MAJOR}"):
+        extra_path = os.path.join(trt_lib_dir, extra)
+        if os.path.isfile(extra_path):
+            try:
+                ctypes.CDLL(extra_path, mode=ctypes.RTLD_GLOBAL)
+            except OSError as e:
+                logging.debug(f"Could not load TensorRT lib {extra_path}: {e}")
+    return True
 
 
 class OnnxSession:
