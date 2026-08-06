@@ -107,18 +107,27 @@ sam3/sam3.pt
 
 [YOLOE](https://docs.ultralytics.com/models/yoloe) is open vocabulary too: the `target_object` string is used as a text prompt, so it is not restricted to COCO classes.
 
-Ultralytics will usually download the chosen checkpoint (e.g. `yoloe-26s-seg.pt`, or `yoloe-26n/m/l/x-seg.pt` for other sizes) on first use. You can also put it in the working directory (repo root). The text encoder weights (`mobileclip_blt.ts`) are downloaded on first `set_classes()` call.
+Ultralytics will usually download the chosen checkpoint (e.g. `yoloe-26s-seg.pt`, or `yoloe-26n/m/l/x-seg.pt` for other sizes) on first use. You can also put it in the working directory (repo root). The text encoder weights (`mobileclip2_b.ts`) are downloaded on first `set_classes()` call.
+
+### Detector pre-initialization
+
+`initialize_detectors.py` runs a blank pass of YOLOE and SAM3 so the pip installs and downloads that Ultralytics does lazily on first use happen once instead of at node startup. Both dockerfiles run it at the end of the build (which is why the build needs `--network host`), downloading into `/opt/ultralytics_weights` and registering that directory as the Ultralytics `weights_dir`, so the node finds the assets from any working directory. SAM3 weights are gated, so that part only prints a warning during the build.
+
+To redo it manually, e.g. for another YOLOE size:
+```
+python initialize_detectors.py --yoloe_models yoloe-26s-seg.pt yoloe-26l-seg.pt
+```
 
 ## Run
 ```
 bash ./docker/run_container.sh 
-python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --ros_verbosity info 
+python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --ros_verbosity info --publish_mask_image
 ```
 
 ### ONNX node (TAO refine/score)
 Same arguments as `node.py`, plus `--use_onnx` so refine/score use the NGC ONNX models via ONNX Runtime:
 ```
-python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --ros_verbosity info 
+python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --ros_verbosity info --publish_mask_image
 ```
 
 ### Offline ONNX benchmark (no ROS)

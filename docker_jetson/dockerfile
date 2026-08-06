@@ -240,3 +240,10 @@ RUN pip install --no-cache-dir "${ONNXRUNTIME_GPU_WHL}" onnx && \
     TRT_EP="$(python3 -c 'import os, onnxruntime; print(os.path.dirname(onnxruntime.__file__))')/capi/libonnxruntime_providers_tensorrt.so" && \
     if ldd "${TRT_EP}" | grep "not found"; then echo "TensorRT EP has unresolved libraries"; exit 1; fi && \
     python3 -c "import onnxruntime as ort; ps = ort.get_available_providers(); print('onnxruntime', ort.__version__, ps); assert 'TensorrtExecutionProvider' in ps"
+
+###### Ultralytics detectors (YOLOE / SAM3)
+# Blank pass so the pip installs and checkpoint downloads that ultralytics performs on
+# first use happen here instead of at node startup. Needs network access (`--network host`).
+# SAM3 weights are gated on Hugging Face: that part only warns and is done at runtime.
+COPY initialize_detectors.py /initialize_detectors.py
+RUN python3 /initialize_detectors.py

@@ -1170,7 +1170,7 @@ if __name__ == "__main__":
     parser.add_argument("--seg_model_name", type=str, default="yoloe-26s-seg.pt", help="Segmentation model name (ignored for sam3).")
     parser.add_argument("--yoloe_conf", type=float, default=0.15, help="Confidence threshold for the YOLOE detections.")
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
-    parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
+    parser.add_argument("--min_initial_detection_counter", type=int, default=1, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
     parser.add_argument("--publish_mask_image", action="store_true", default=False, help="Publish raw RGB Image with colored detection masks for RViz debug.")
     parser.add_argument("--fp_verbosity", type=str, default="warning", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")

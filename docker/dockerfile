@@ -142,3 +142,10 @@ RUN python3 -m pip install --no-cache-dir \
 # Make the TensorRT shared libs visible to ORT's dynamic loader lookup.
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/tensorrt_libs:/usr/local/lib/python3.10/dist-packages/nvidia/tensorrt_libs:${LD_LIBRARY_PATH}
 RUN echo "export LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/tensorrt_libs:/usr/local/lib/python3.10/dist-packages/nvidia/tensorrt_libs:\$LD_LIBRARY_PATH" >> ~/.bashrc
+
+###### Ultralytics detectors (YOLOE / SAM3)
+# Blank pass so the pip installs and checkpoint downloads that ultralytics performs on
+# first use happen here instead of at node startup. Needs network access (`--network host`).
+# SAM3 weights are gated on Hugging Face: that part only warns and is done at runtime.
+COPY initialize_detectors.py /initialize_detectors.py
+RUN python3 /initialize_detectors.py
