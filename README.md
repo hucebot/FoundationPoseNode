@@ -196,10 +196,11 @@ ycbmustard
 Per-object fields in `OBJECT_KEYS_TO_PARAMETERS` (not CLI): `symmetry_x/y/z_angles` (comma-separated deg, fewer hypotheses), `constraint_yaw/pitch/roll_in` (`None`, `0`, or `[lo,hi]` to clamp Euler angles after pose).
 
 > [!WARNING]
-> When using --use_onnx by default the node will try to instantiate TensorRT engines. They will be saved in foundationpose/weights/onnx/trt_cache.
+> When using --use_onnx by default the node will try to instantiate TensorRT engines. They will be saved in `foundationpose/weights/onnx/trt_cache`.
 > In `onnx_predictors.py` the variable `_TRT_SINGLE_ENGINE_FOR_ALL_BATCHES = False` controls how these engines are created. If `False` engine creation should take 
 > a few minutes at most, if `True` it could be much longer (creating a single engine for all batch sizes) but then you should be able to change objects including 
 > objects with different symmetries without a new engine being created.
+> If you want to use ONNX-Runtime without TensorRT you can pass the flag `--no_prefer_tensorrt`
 
 
 # Realsense camera driver
