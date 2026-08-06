@@ -17,7 +17,7 @@ Subscriptions:
 Publishes:
   - /foundation_pose/object_pose (geometry_msgs/PoseStamped)
   - /foundation_pose/object_marker (visualization_msgs/Marker) mesh marker at pose
-  - /foundation_pose/mask_image/compressed (sensor_msgs/CompressedImage) optional debug mask overlay
+  - /foundation_pose/mask_image (sensor_msgs/Image) optional debug mask overlay
 """
 
 import argparse
@@ -39,6 +39,7 @@ from visualization_msgs.msg import Marker
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 from foundationpose.estimater import *
+from sensor_msgs.msg import Image  # after estimater * (PIL.Image would otherwise shadow this)
 from ultralytics import YOLO
 from ultralytics.models.sam import SAM3SemanticPredictor
 
@@ -563,8 +564,8 @@ class FoundationPoseROS2Node(Node):
         self._mask_image_pub = None
         if self.publish_mask_image:
             self._mask_image_pub = self.create_publisher(
-                CompressedImage,
-                "/foundation_pose/mask_image/compressed",
+                Image,
+                "/foundation_pose/mask_image",
                 qos_sensor,
             )
 
@@ -775,9 +776,10 @@ class FoundationPoseROS2Node(Node):
         self._marker_pub.publish(marker)
 
     def _publish_mask_image(self, rgb, masks, header):
-        """Overlay one color per mask on rgb (HxWx3) and publish as compressed JPEG."""
+        """Overlay one color per mask on rgb (HxWx3) and publish as raw Image."""
         if self._mask_image_pub is None or masks is None or len(masks) == 0:
             return
+        t0 = time.time()
         vis = rgb.copy()
         colors = [
             (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
@@ -795,15 +797,17 @@ class FoundationPoseROS2Node(Node):
             color = np.array(colors[i % len(colors)], dtype=np.float32)
             vis[sel] = (0.45 * vis[sel].astype(np.float32) + 0.55 * color).astype(np.uint8)
 
-        ok, buf = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR))
-        if not ok:
-            self.get_logger().warn("Failed to encode mask debug image")
-            return
-        msg = CompressedImage()
+        vis = np.ascontiguousarray(vis)
+        msg = Image()
         msg.header = header
-        msg.format = "jpeg"
-        msg.data = buf.tobytes()
+        msg.height = vis.shape[0]
+        msg.width = vis.shape[1]
+        msg.encoding = "rgb8"
+        msg.is_bigendian = False
+        msg.step = vis.shape[1] * 3
+        msg.data = vis.tobytes()
         self._mask_image_pub.publish(msg)
+        self.get_logger().debug(f"Publish mask image: {(time.time()-t0)*1000:.2f} ms ({len(masks)} mask(s))")
 
     def _camera_info_cb(self, msg: CameraInfo):
         if self.K is not None:
@@ -892,7 +896,7 @@ class FoundationPoseROS2Node(Node):
             self.current_phase = "Detecting"
 
             if self.seg_model_type == "sam3":
-                color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+                # color is already RGB from decode_compressed_color
                 self.seg_model.set_image(color)
                 results = self.seg_model(text=[self.target_object], verbose=False)
                 
@@ -1160,7 +1164,7 @@ if __name__ == "__main__":
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=5, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
-    parser.add_argument("--publish_mask_image", action="store_true", default=False, help="Publish compressed RGB with colored detection masks for RViz debug.")
+    parser.add_argument("--publish_mask_image", action="store_true", default=False, help="Publish raw RGB Image with colored detection masks for RViz debug.")
     parser.add_argument("--fp_verbosity", type=str, default="warning", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     parser.add_argument("--ros_verbosity", type=str, default="info", help="ROS logger severity (debug/info/warn/error/fatal). Defaults to RCUTILS_LOGGING_SEVERITY or INFO.")
     parser.add_argument("--use_onnx", action="store_true", default=False, help="Use ONNX predictors instead of the default scorer and refiner.")
