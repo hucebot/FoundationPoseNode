@@ -88,7 +88,7 @@ _SLOW_FIRST_RUN_S = 5.0
 #   False - let the TRT EP derive the shape from the incoming tensor, giving a separate
 #           engine per batch size: each build is fast, but a new object whose rotation grid
 #           has a size not built yet stalls registration while its engine is created.
-_TRT_SINGLE_ENGINE_FOR_ALL_BATCHES = True
+_TRT_SINGLE_ENGINE_FOR_ALL_BATCHES = False
 
 
 def _default_ort_providers(

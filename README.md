@@ -152,7 +152,7 @@ ros2 topic pub /orchestrator/foundation_pose/target_object std_msgs/msg/String d
 
 Toggle the tracking on or off (off by default)
 ```
-ros2 topic pub /orchestrator/pose/toggle_tracking std_msgs/msg/Bool data:\ true --once
+ros2 topic pub /orchestrator/foundation_pose/toggle_tracking std_msgs/msg/Bool data:\ true --once
 ```
 
 Object names (update the switch objects string according to your need) : 
@@ -173,46 +173,33 @@ spam
 ycbmustard
 ```
 
-## Troubleshooting
-Quick DDS/topic test (prints from callback only):
-```
-python dummy_node_sub.py --mode rgb
-python dummy_node_sub.py --mode depth
-python dummy_node_sub.py --mode sync --slop 0.05
-```
-
-To switch the target object string (but keep the same mesh)
-```
-ros2 topic pub /orchestrator/pose/target_object std_msgs/msg/String data:\ \'yellow\ bottle\' --once
-```
-
-
 ## Parameters
 
-- `mesh_file`
-- `target_object`
-- `est_refine_iter`
-- `track_refine_iter`
-- `debug`
-- `debug_dir`
-- `depth_scale`
-- `color_topic`
-- `depth_topic`
-- `camera_info_topic`
-- `pose_frame_id`
-- `slop`
-- `seg_model_type` : either `yoloe` or `sam3`, both are open vocabulary so the `target_object` can be any text prompt (e.g. `yellow bottle`)
-- `seg_model_name` : will always default to `sam3.pt` if seg_model_type is sam3 otherwise use to specify the YOLOE model size e.g. `yoloe-26s-seg.pt`
-- `yoloe_conf` : confidence threshold of the YOLOE detections, defaults to `0.15` (lower than the ultralytics default of `0.25` since open vocabulary prompts often score low)
-- `resize_factor` : divide the image size by this factor to reduce memory usage
-- `min_initial_detection_counter` : requires minimum consecutive detections (with one and only one valid object in the frame) at the begining before starting the pose estimation (only usable when `seg_model_type` is `yoloe`)
-- `enable_pose_tracking` : do pose tracking, otherwise keep re-doing the initial pose estimation for each frame
-- `fix_rotation_convention` : change the object yaw rotation (around its `z` axis) with 4 options :
-  - `None` : Keep the model output
-  - `Initial` : when the node is turned on will set an offset to have the yaw in 0-90 deg and keep applying this offset
-  - `All` : at every iteration, will offset the yaw to be in 0-90 deg
-  - `Force0` : at every iteration will put the yaw to 0 (e.g. for round objects)
-- `symmetry_yaw_angles`: intialize symmetry transforms on the `z` axis for Foundation Pose (reduces the number of initial hypothesis), example : `0,90,180,270` for a "square" based object
+- `object_key` : object preset from `OBJECT_KEYS_TO_PARAMETERS` (sets mesh, text prompt, symmetries, and rotation constraints)
+- `camera_name` : builds color/depth/camera_info topics and `pose_frame_id` under `/rgbd/<camera_name>/...`
+- `est_refine_iter` / `track_refine_iter` : FoundationPose refine iters for register / track
+- `debug` / `debug_dir` : debug level and output directory (auto path if empty)
+- `depth_scale` : depth units to meters (default `0.001`)
+- `slop` : RGB–depth sync slop
+- `seg_model_type` : `yoloe` or `sam3` (open-vocab; prompt comes from the object preset)
+- `seg_model_name` : YOLOE weights e.g. `yoloe-26s-seg.pt` (ignored for sam3)
+- `yoloe_conf` : YOLOE confidence threshold (default `0.15`)
+- `resize_factor` : divide image size by this to save memory
+- `min_initial_detection_counter` : consecutive single-object detections required before starting pose (yoloe)
+- `enable_pose_tracking` : track after first pose; otherwise re-register every frame
+- `publish_mask_image` : publish RGB with colored masks for RViz
+- `fp_verbosity` / `ros_verbosity` : FoundationPose / ROS log levels
+- `use_onnx` : use ONNX refine/score instead of default predictors
+- `refiner_onnx` / `scorer_onnx` : optional paths to ONNX models
+- `no_prefer_tensorrt` : disable TensorRT EP when using ONNX
+
+Per-object fields in `OBJECT_KEYS_TO_PARAMETERS` (not CLI): `symmetry_x/y/z_angles` (comma-separated deg, fewer hypotheses), `constraint_yaw/pitch/roll_in` (`None`, `0`, or `[lo,hi]` to clamp Euler angles after pose).
+
+> [!WARNING]
+> When using --use_onnx by default the node will try to instantiate TensorRT engines. They will be saved in foundationpose/weights/onnx/trt_cache.
+> In `onnx_predictors.py` the variable `_TRT_SINGLE_ENGINE_FOR_ALL_BATCHES = False` controls how these engines are created. If `False` engine creation should take 
+> a few minutes at most, if `True` it could be much longer (creating a single engine for all batch sizes) but then you should be able to change objects including 
+> objects with different symmetries without a new engine being created.
 
 
 # Realsense camera driver
@@ -223,10 +210,3 @@ To launch a realsense camera from the docker :
 ```
 
 If `[camera_name]` is not specified it will default to `realsense_default`
-
-## TODO
-- [] Handle all kind of symmetries (not only Z axis)
-- [] Simplify the cluster_poses for infinite symmetry of round objects
-- [] Add another kind of filtering to avoid flipping
-- [] Check point-cloud stability for depth estimation (inc. in fridge)
-- [] Better referencing of objects for detection
