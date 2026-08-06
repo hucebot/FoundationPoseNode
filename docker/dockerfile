@@ -124,3 +124,21 @@ RUN pip install ultralytics==8.4
 # Setup shell
 ENV SHELL=/bin/bash
 RUN ln -sf /bin/bash /bin/sh
+
+###### ONNX Runtime (TAO FoundationPose deployable_v1.0 refine/score nets)
+# Appended last to preserve Docker layer cache for the heavy deps above.
+# Rebuild required before: python node.py --use_onnx / python benchmark_onnx.py
+RUN pip install --no-cache-dir "onnxruntime-gpu>=1.17,<1.23" onnx
+
+###### TensorRT runtime for ONNX Runtime TensorRT EP (x86_64 desktop image)
+# Keep this at the very end to preserve the cache of the layers above.
+# `onnxruntime-gpu` may advertise the TensorRT EP even when libnvinfer is absent;
+# these pip packages provide the TensorRT shared libraries and Python bindings.
+RUN python3 -m pip install --no-cache-dir \
+    "tensorrt-cu12>=10,<11" \
+    "tensorrt-cu12-bindings>=10,<11" \
+    "tensorrt-cu12-libs>=10,<11"
+
+# Make the TensorRT shared libs visible to ORT's dynamic loader lookup.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/tensorrt_libs:/usr/local/lib/python3.10/dist-packages/nvidia/tensorrt_libs:${LD_LIBRARY_PATH}
+RUN echo "export LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/tensorrt_libs:/usr/local/lib/python3.10/dist-packages/nvidia/tensorrt_libs:\$LD_LIBRARY_PATH" >> ~/.bashrc

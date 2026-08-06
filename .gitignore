@@ -5,6 +5,9 @@ debug_node/
 # assets/
 build/
 *.pth
+*.onnx
+*.plan
+*.engine
 NOTES.md
 assets_old/
 assets.zip
@@ -12,3 +15,4 @@ node_bk.py
 assets/assets_creation/output/
 assets/ycb
 *_rot_grid.npy
+foundationpose/weights/onnx/trt_cache/

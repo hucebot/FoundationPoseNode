@@ -61,14 +61,6 @@ docker build --network host -f docker_jetson/dockerfile -t foundationposev2_jets
 bash ./docker_jetson/run_container.sh
 ```
 
-That image takes a long time to build. To check DDS/topic connectivity with the robot first, `docker_jetson_comtest` builds a minimal ROS2 Jazzy image (no CUDA, no FoundationPose dependencies) in a few minutes:
-```
-docker build --network host -f docker_jetson_comtest/dockerfile -t fp_comtest .
-bash ./docker_jetson_comtest/run_container.sh
-ros2 topic list
-python dummy_node_sub.py --mode rgb
-```
-
 ## Models
 
 Weights are not shipped in this repo (they are gitignored). Download them before running the node.
@@ -87,6 +79,20 @@ foundationpose/weights/
     └── model_best.pth
 ```
 
+### FoundationPose ONNX (TAO deployable_v1.0)
+
+For `node.py --use_onnx` / `benchmark_onnx.py`, download the [NGC TAO FoundationPose](https://catalog.ngc.nvidia.com/orgs/nvidia/tao/models/foundationpose) ONNX nets:
+
+```
+mkdir -p foundationpose/weights/onnx && cd foundationpose/weights/onnx
+curl -L -o refiner_net.onnx \
+  https://api.ngc.nvidia.com/v2/models/nvidia/tao/foundationpose/versions/deployable_v1.0/files/refiner_net.onnx
+curl -L -o score_net.onnx \
+  https://api.ngc.nvidia.com/v2/models/nvidia/tao/foundationpose/versions/deployable_v1.0/files/score_net.onnx
+```
+
+Requires `onnxruntime-gpu` in the image (added at the end of `docker/dockerfile` — rebuild the image once after pulling that change).
+
 ### SAM3 (`--seg_model_type sam3`)
 
 SAM3 weights are gated and are **not** auto-downloaded by Ultralytics. Request access on [Hugging Face: facebook/sam3](https://huggingface.co/facebook/sam3), then download [`sam3.pt`](https://huggingface.co/facebook/sam3/resolve/main/sam3.pt?download=true) and place it at:
@@ -104,8 +110,24 @@ Ultralytics will usually download the chosen checkpoint (e.g. `yolo26n-seg.pt`) 
 ## Run
 ```
 bash ./docker/run_container.sh 
-python node.py --resize_factor 2 --mesh_file ./assets/hackathon2/milk/milk.obj -sza 0,30,60,90,120,150,180,210,240,270,300,330 --seg_model_type sam3 --target_object white\ bottle -v warning
+python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --fp_verbosity warning
 ```
+
+### ONNX node (TAO refine/score)
+Same arguments as `node.py`, plus `--use_onnx` so refine/score use the NGC ONNX models via ONNX Runtime:
+```
+python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --fp_verbosity warning
+```
+
+### Offline ONNX benchmark (no ROS)
+```
+python benchmark_onnx.py \
+  --rgb_file ./illustrations/objects_hackathon2.jpeg \
+  --mesh_file ./assets/hackathon2/milk/milk.obj \
+  --target_object bottle \
+  --iters 5 --warmup 1
+```
+Without `--depth_file`, a planar fake depth is filled in the detection mask (useful for timing; poses are not metrically accurate).
 
 Toggle the node (on by feault)
 ```
