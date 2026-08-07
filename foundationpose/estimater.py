@@ -36,7 +36,7 @@ class FoundationPose:
       min_n_view = 40
       inplane_step = 60
 
-    rot_grid_path = os.path.join(os.getcwd(), f'{meshname}_rot_grid.npy') if meshname else None
+    rot_grid_path = os.path.join(os.getcwd(), "rot_grids", f'{meshname}_rot_grid.npy') if meshname else None
     if rot_grid_path and os.path.isfile(rot_grid_path):
       self.rot_grid = torch.as_tensor(np.load(rot_grid_path), device='cuda', dtype=torch.float)
       print(f'Loaded rot_grid from {rot_grid_path}: {self.rot_grid.shape}')

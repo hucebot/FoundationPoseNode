@@ -14,6 +14,6 @@ assets.zip
 node_bk.py
 assets/assets_creation/output/
 assets/ycb
-*_rot_grid.npy
+# *_rot_grid.npy
 foundationpose/weights/onnx/trt_cache/
 mobileclip2_b.ts
