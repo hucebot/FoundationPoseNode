@@ -685,6 +685,16 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "constraint_pitch_in": [0,180],
                 "constraint_roll_in": [0,180]},
 
+    "orange" : {"mesh_file": "./assets/hackathon3/orange/orange.obj",
+                  "symmetry_x_angles": "0,180",
+                  "symmetry_y_angles": "0,180",
+                  "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+                  "target_object": "red apple",
+                  "vlm_prompt": "Detect the red apple",
+                  "constraint_yaw_in": 0,
+                  "constraint_pitch_in": 0,
+                  "constraint_roll_in": 0},
+
     }
 
 
