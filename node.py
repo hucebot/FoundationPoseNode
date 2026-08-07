@@ -1502,8 +1502,8 @@ class FoundationPoseROS2Node(Node):
             self.current_phase = "Detecting"
 
             if self.seg_model_type == "sam3":
-                # color is already RGB from decode_compressed_color
-                self.seg_model.set_image(color)
+                # TEMP: pass BGR to check channel order (was RGB; YOLOE already uses BGR for ultralytics)
+                self.seg_model.set_image(cv2.cvtColor(color, cv2.COLOR_RGB2BGR))
                 results = self.seg_model(text=[self.target_object], verbose=False)
                 
                 # Log SAM3 inference speed and results
