@@ -187,6 +187,7 @@ Same arguments as `node.py`, plus `--use_onnx` so refine/score use the NGC ONNX 
 python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --ros_verbosity info --publish_mask_image --multiple_object_method biggest
 ```
 
+
 Pre-build TensorRT engines (recommended, avoids multi-minute stalls on first register):
 ```
 # default: milk batch (=37)
@@ -206,6 +207,10 @@ python build_trt_engines.py --batch_size 1 37 252
 ```
 Engines are stored under `foundationpose/weights/onnx/trt_cache`.
 
+To check the current `rot_grid` sizes
+```
+python3 -c "import glob,numpy as np; print(sorted((f, int(np.load(f).shape[0])) for f in glob.glob('*_rot_grid.npy')))"
+```
 
 ### Other
 Toggle the node (on by default)

@@ -689,11 +689,21 @@ OBJECT_KEYS_TO_PARAMETERS = {
                   "symmetry_x_angles": "0,180",
                   "symmetry_y_angles": "0,180",
                   "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
-                  "target_object": "red apple",
-                  "vlm_prompt": "Detect the red apple",
+                  "target_object": "orange",
+                  "vlm_prompt": "Detect the orange",
                   "constraint_yaw_in": 0,
                   "constraint_pitch_in": 0,
                   "constraint_roll_in": 0},
+
+    "bluecup" : {"mesh_file": "./assets/hackathon3/bluecup/bluecup.obj",
+              "symmetry_x_angles": "",
+              "symmetry_y_angles": "",
+              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+              "target_object": "blue cup",
+              "vlm_prompt": "Detect the blue cup with a gray lid",
+              "constraint_yaw_in": 0,
+              "constraint_pitch_in": None,
+              "constraint_roll_in": None},
 
     }
 
