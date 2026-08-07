@@ -29,7 +29,7 @@ _MAX_BATCH = 252
 # Unique len(rot_grid) values from *_rot_grid.npy in the repo root.
 # Refresh with:
 #   python3 -c "import glob,numpy as np; print(sorted({int(np.load(f).shape[0]) for f in glob.glob('*_rot_grid.npy')}))"
-ROT_GRID_BATCH_SIZES = [22, 37, 49, 104, 126, 252]
+ROT_GRID_BATCH_SIZES = [22, 36, 37, 49, 104, 126, 252]
 
 
 def _resolve_batch_sizes(args) -> tuple[list[int], bool]:
