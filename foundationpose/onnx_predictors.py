@@ -88,24 +88,57 @@ _SLOW_FIRST_RUN_S = 5.0
 #   False - let the TRT EP derive the shape from the incoming tensor, giving a separate
 #           engine per batch size: each build is fast, but a new object whose rotation grid
 #           has a size not built yet stalls registration while its engine is created.
+# Override per-session via OnnxSession(..., single_engine_for_all_batches=...).
 _TRT_SINGLE_ENGINE_FOR_ALL_BATCHES = False
+
+# Leave this much free GPU memory unused when sizing TensorRT workspace (bytes).
+_TRT_WORKSPACE_RESERVE_BYTES = 512 * 1024 * 1024
+_TRT_WORKSPACE_MIN_BYTES = 256 * 1024 * 1024
+
+
+def _trt_max_workspace_bytes(device_id: int = 0) -> int:
+    """Cap TensorRT workspace to currently free GPU memory (minus a reserve)."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required to size TensorRT workspace from free GPU memory.")
+    torch.cuda.synchronize(device_id)
+    free_b, total_b = torch.cuda.mem_get_info(device_id)
+    workspace = int(free_b) - int(_TRT_WORKSPACE_RESERVE_BYTES)
+    if workspace < _TRT_WORKSPACE_MIN_BYTES:
+        raise RuntimeError(
+            "Not enough free GPU memory for TensorRT engine build: "
+            f"free={free_b / 1e9:.2f}GB total={total_b / 1e9:.2f}GB "
+            f"reserve={_TRT_WORKSPACE_RESERVE_BYTES / 1e9:.2f}GB. "
+            "Free VRAM (close other GPU users) or use --no_prefer_tensorrt."
+        )
+    logging.info(
+        f"TensorRT workspace cap={workspace / 1e9:.2f}GB "
+        f"(GPU free={free_b / 1e9:.2f}GB / total={total_b / 1e9:.2f}GB)"
+    )
+    return workspace
 
 
 def _default_ort_providers(
     prefer_tensorrt: bool = True,
     input_names: Optional[Sequence[str]] = None,
     max_batch: int = 0,
+    single_engine_for_all_batches: Optional[bool] = None,
 ) -> list:
     """Pick ORT execution providers.
 
     If prefer_tensorrt is True, TensorRT must be usable or this raises.
     If prefer_tensorrt is False, use CUDA then CPU.
-    input_names / max_batch declare the TensorRT shape profile (see below).
+    input_names / max_batch declare the TensorRT shape profile when
+    single_engine_for_all_batches is enabled.
     """
     import onnxruntime as ort
 
     available = set(ort.get_available_providers())
     providers = []
+    use_single_profile = (
+        _TRT_SINGLE_ENGINE_FOR_ALL_BATCHES
+        if single_engine_for_all_batches is None
+        else bool(single_engine_for_all_batches)
+    )
 
     if prefer_tensorrt:
         if "TensorrtExecutionProvider" not in available:
@@ -125,7 +158,10 @@ def _default_ort_providers(
                 "CUDAExecutionProvider."
             )
         trt_cache = os.path.join(DEFAULT_ONNX_DIR, "trt_cache")
+        workspace = _trt_max_workspace_bytes(device_id=0)
         trt_options = {
+            "device_id": 0,
+            "trt_max_workspace_size": workspace,
             "trt_fp16_enable": True,
             "trt_engine_cache_enable": True,
             "trt_engine_cache_path": trt_cache,
@@ -135,8 +171,10 @@ def _default_ort_providers(
             # Engine builds are rare but multi-minute and otherwise silent; this reports
             # the per-build timing so a stall can be told apart from a hang.
             "trt_detailed_build_log": True,
+            # Lower peak VRAM when several TRT subgraphs are built.
+            "trt_force_sequential_engine_build": True,
         }
-        if _TRT_SINGLE_ENGINE_FOR_ALL_BATCHES and input_names and max_batch > 0:
+        if use_single_profile and input_names and max_batch > 0:
             trt_options["trt_profile_min_shapes"] = ",".join(
                 f"{name}:1x{_NET_INPUT_CHW}" for name in input_names
             )
@@ -240,6 +278,7 @@ class OnnxSession:
         providers: Optional[list] = None,
         prefer_tensorrt: bool = True,
         max_batch: int = 0,
+        single_engine_for_all_batches: Optional[bool] = None,
     ):
         import onnxruntime as ort
 
@@ -262,6 +301,7 @@ class OnnxSession:
                 prefer_tensorrt=prefer_tensorrt,
                 input_names=self.input_names,
                 max_batch=max_batch,
+                single_engine_for_all_batches=single_engine_for_all_batches,
             )
         os.makedirs(os.path.join(DEFAULT_ONNX_DIR, "trt_cache"), exist_ok=True)
         so = ort.SessionOptions()

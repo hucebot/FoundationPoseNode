@@ -1,5 +1,5 @@
 """
-Run a blank pass of the Ultralytics detectors used by node.py (YOLOE and SAM3).
+Run a blank pass of the Ultralytics detectors used by node.py (YOLOE, SAM3, SAM2).
 
 The first use of these models triggers lazy work that would otherwise happen on the first
 run of the node: pip installs done by ultralytics itself (CLIP, mobileclip, ...) and the
@@ -8,6 +8,8 @@ gets it out of the way, so the node starts offline and without surprises.
 
 Downloads are written to `weights_dir`, which is also registered as the ultralytics
 `weights_dir` setting so that the assets are found later whatever the working directory is.
+
+Optionally also downloads the Qwen VLM used by `--seg_model_type qwen_sam2`.
 """
 
 import argparse
@@ -71,6 +73,42 @@ def main(args):
             failures.append(f"SAM3 {args.sam3_model}: {e}")
             print(f"[initialize_detectors] SAM3 {args.sam3_model} FAILED: {e}")
 
+    if not args.skip_sam2:
+        print(f"[initialize_detectors] SAM2: {args.sam2_model}")
+        try:
+            from ultralytics.models.sam import SAM2Predictor
+
+            overrides = dict(
+                conf=0.25,
+                task="segment",
+                mode="predict",
+                model=args.sam2_model,
+                device=args.device,
+                half=args.device != "cpu",
+                save=False,
+                verbose=False,
+            )
+            predictor = SAM2Predictor(overrides=overrides)
+            predictor.set_image(blank_image)
+            predictor(bboxes=[[100, 100, 300, 400]])
+            print(f"[initialize_detectors] SAM2 {args.sam2_model} OK")
+        except Exception as e:
+            failures.append(f"SAM2 {args.sam2_model}: {e}")
+            print(f"[initialize_detectors] SAM2 {args.sam2_model} FAILED: {e}")
+
+    if not args.skip_qwen:
+        print(f"[initialize_detectors] Qwen: {args.qwen_model}")
+        try:
+            from huggingface_hub import snapshot_download
+            from transformers import AutoProcessor
+
+            path = snapshot_download(args.qwen_model)
+            AutoProcessor.from_pretrained(args.qwen_model)
+            print(f"[initialize_detectors] Qwen {args.qwen_model} OK ({path})")
+        except Exception as e:
+            failures.append(f"Qwen {args.qwen_model}: {e}")
+            print(f"[initialize_detectors] Qwen {args.qwen_model} FAILED: {e}")
+
     print(f"[initialize_detectors] content of {args.weights_dir}: {sorted(os.listdir(args.weights_dir))}")
     if failures:
         print(f"[initialize_detectors] {len(failures)} detector(s) not initialized:")
@@ -87,11 +125,15 @@ if __name__ == "__main__":
     parser.add_argument("--weights_dir", type=str, default="/opt/ultralytics_weights", help="Directory where the ultralytics assets are downloaded (also set as the ultralytics weights_dir setting).")
     parser.add_argument("--yoloe_models", type=str, nargs="+", default=["yoloe-26s-seg.pt"], help="YOLOE checkpoints to initialize.")
     parser.add_argument("--sam3_model", type=str, default="sam3/sam3.pt", help="SAM3 checkpoint to initialize (gated weights, skipped with a warning if unavailable).")
+    parser.add_argument("--sam2_model", type=str, default="sam2_s.pt", help="SAM2 checkpoint used by qwen_sam2.")
+    parser.add_argument("--qwen_model", type=str, default="Qwen/Qwen3.5-0.8B", help="Hugging Face id for the Qwen VLM used by qwen_sam2.")
     parser.add_argument("--target_object", type=str, default="object", help="Text prompt used for the blank pass.")
     parser.add_argument("--image_size", type=int, default=640, help="Side of the square blank image fed to the models.")
     parser.add_argument("--device", type=str, default="cpu", help="Device used for the blank pass (cpu, since no GPU is available during a docker build).")
     parser.add_argument("--skip_yoloe", action="store_true", help="Do not initialize YOLOE.")
     parser.add_argument("--skip_sam3", action="store_true", help="Do not initialize SAM3.")
+    parser.add_argument("--skip_sam2", action="store_true", help="Do not initialize SAM2.")
+    parser.add_argument("--skip_qwen", action="store_true", help="Do not download / initialize the Qwen VLM.")
     parser.add_argument("--strict", action="store_true", help="Exit with an error if a detector could not be initialized.")
     args = parser.parse_args()
     main(args)

@@ -148,7 +148,11 @@ RUN python3 -m pip install --no-cache-dir \
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/tensorrt_libs:/usr/local/lib/python3.10/dist-packages/nvidia/tensorrt_libs:${LD_LIBRARY_PATH}
 RUN echo "export LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/tensorrt_libs:/usr/local/lib/python3.10/dist-packages/nvidia/tensorrt_libs:\$LD_LIBRARY_PATH" >> ~/.bashrc
 
-###### Ultralytics detectors (YOLOE / SAM3)
+###### Qwen3.5 VLM (optional --seg_model_type qwen_sam2 in node.py)
+# AutoModelForMultimodalLM for Qwen3.5 requires a recent transformers.
+RUN pip install --no-cache-dir accelerate "git+https://github.com/huggingface/transformers.git@main"
+
+###### Ultralytics detectors (YOLOE / SAM3 / SAM2)
 # Blank pass so the pip installs and checkpoint downloads that ultralytics performs on
 # first use happen here instead of at node startup. Needs network access (`--network host`).
 # SAM3 weights are gated on Hugging Face: that part only warns and is done at runtime.

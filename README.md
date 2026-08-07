@@ -143,9 +143,23 @@ sam3/sam3.pt
 
 Ultralytics will usually download the chosen checkpoint (e.g. `yoloe-26s-seg.pt`, or `yoloe-26n/m/l/x-seg.pt` for other sizes) on first use. You can also put it in the working directory (repo root). The text encoder weights (`mobileclip2_b.ts`) are downloaded on first `set_classes()` call.
 
+### Qwen + SAM2 (`--seg_model_type qwen_sam2_detect` / `qwen_sam2_point`)
+
+Uses [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) with each object's `vlm_prompt` from `OBJECT_KEYS_TO_PARAMETERS`, then [SAM2](https://docs.ultralytics.com/models/sam-2) for the mask. Lighter VRAM than Qwen+SAM3.
+
+- `qwen_sam2_detect` : Qwen returns a bbox → SAM2 box prompt
+- `qwen_sam2_point` : `Detect` in the prompt is swapped to `Locate`; Qwen returns a point → SAM2 point prompt
+
+Default SAM2 weights: `sam2_s.pt` (override with `--seg_model_name`, e.g. `sam2_b.pt`). Qwen model: `--qwen_model Qwen/Qwen3.5-0.8B`.
+
+```
+python node.py --resize_factor 2 --object_key milk --seg_model_type qwen_sam2_detect --ros_verbosity info --publish_mask_image
+python node.py --resize_factor 2 --object_key milk --seg_model_type qwen_sam2_point --no_fp --publish_mask_image
+```
+
 ### Detector pre-initialization
 
-`initialize_detectors.py` runs a blank pass of YOLOE and SAM3 so the pip installs and downloads that Ultralytics does lazily on first use happen once instead of at node startup. Both dockerfiles run it at the end of the build (which is why the build needs `--network host`), downloading into `/opt/ultralytics_weights` and registering that directory as the Ultralytics `weights_dir`, so the node finds the assets from any working directory. SAM3 weights are gated, so that part only prints a warning during the build.
+`initialize_detectors.py` runs a blank pass of YOLOE, SAM2, and SAM3 so the pip installs and downloads that Ultralytics does lazily on first use happen once instead of at node startup. It can also prefetch the Qwen VLM. Both dockerfiles run it at the end of the build (which is why the build needs `--network host`), downloading into `/opt/ultralytics_weights` and registering that directory as the Ultralytics `weights_dir`, so the node finds the assets from any working directory. SAM3 weights are gated, so that part only prints a warning during the build.
 
 To redo it manually, e.g. for another YOLOE size:
 ```
@@ -173,16 +187,27 @@ Same arguments as `node.py`, plus `--use_onnx` so refine/score use the NGC ONNX 
 python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --ros_verbosity info --publish_mask_image
 ```
 
-### Offline ONNX benchmark (no ROS)
+Pre-build TensorRT engines (recommended, avoids multi-minute stalls on first register):
 ```
-python benchmark_onnx.py \
-  --rgb_file ./illustrations/objects_hackathon2.jpeg \
-  --mesh_file ./assets/hackathon2/milk/milk.obj \
-  --target_object bottle \
-  --iters 5 --warmup 1
-```
-Without `--depth_file`, a planar fake depth is filled in the detection mask (useful for timing; poses are not metrically accurate).
+# default: milk batch (=37)
+python build_trt_engines.py
 
+# milk + tracking batch=1
+python build_trt_engines.py --include_batch_1
+
+# one engine per known rot_grid batch size (see ROT_GRID_BATCH_SIZES in the script)
+python build_trt_engines.py --from_rot_grids --include_batch_1
+
+# single dynamic profile covering 1..252 (slow one-shot build)
+python build_trt_engines.py --all_batches
+
+# custom sizes
+python build_trt_engines.py --batch_size 1 37 252
+```
+Engines are stored under `foundationpose/weights/onnx/trt_cache`.
+
+
+### Other
 Toggle the node (on by default)
 ```
 ros2 topic pub /orchestrator/foundation_pose/toggle_fp std_msgs/msg/Bool data:\ true --once
@@ -230,19 +255,23 @@ ycbmustard
 - `publish_moge_depth` : publish MoGe depth as `16UC1` mm `image_raw` (requires `--depth_source moge`)
 - `moge_depth_topic` : MoGe depth topic (default `/foundation_pose/moge_depth/image_raw`)
 - `slop` : RGB–depth sync slop (RealSense path only)
-- `seg_model_type` : `yoloe` or `sam3` (open-vocab; prompt comes from the object preset)
-- `seg_model_name` : YOLOE weights e.g. `yoloe-26s-seg.pt` (ignored for sam3)
+- `seg_model_type` : `yoloe`, `sam3`, `qwen_sam2_detect` (Qwen bbox + SAM2), or `qwen_sam2_point` (Qwen point + SAM2)
+- `seg_model_name` : YOLOE weights e.g. `yoloe-26s-seg.pt`, or SAM2 weights e.g. `sam2_s.pt` for `qwen_sam2_*` (forced to `sam3.pt` for sam3)
+- `qwen_model` : Hugging Face id for Qwen when using `qwen_sam2_*` (default `Qwen/Qwen3.5-0.8B`)
+- `qwen_thinking_budget` : max thinking tokens included in Qwen `max_new_tokens` (default `256`; `0` disables the thinking allowance)
 - `yoloe_conf` : YOLOE confidence threshold (default `0.15`)
+- `multiple_object_method` : when several masks are found, `none` skips the frame (default) or `biggest` keeps the largest mask
 - `resize_factor` : divide image size by this to save memory
 - `min_initial_detection_counter` : consecutive single-object detections required before starting pose (yoloe)
 - `enable_pose_tracking` : track after first pose; otherwise re-register every frame
-- `publish_mask_image` : publish RGB with colored masks for RViz
+- `no_fp` : skip FoundationPose register/track at runtime (models still load; detection/segmentation only)
+- `publish_mask_image` : publish RGB with colored masks for RViz; for Qwen modes also draws the bbox or point prompt
 - `fp_verbosity` / `ros_verbosity` : FoundationPose / ROS log levels
 - `use_onnx` : use ONNX refine/score instead of default predictors
 - `refiner_onnx` / `scorer_onnx` : optional paths to ONNX models
 - `no_prefer_tensorrt` : disable TensorRT EP when using ONNX
 
-Per-object fields in `OBJECT_KEYS_TO_PARAMETERS` (not CLI): `symmetry_x/y/z_angles` (comma-separated deg, fewer hypotheses), `constraint_yaw/pitch/roll_in` (`None`, `0`, or `[lo,hi]` to clamp Euler angles after pose).
+Per-object fields in `OBJECT_KEYS_TO_PARAMETERS` (not CLI): `symmetry_x/y/z_angles` (comma-separated deg, fewer hypotheses), `constraint_yaw/pitch/roll_in` (`None`, `0`, or `[lo,hi]` to clamp Euler angles after pose), `vlm_prompt` (Qwen prompt for `qwen_sam2_*`, typically `Detect the …`; point mode rewrites `Detect` → `Locate` at runtime).
 
 > [!WARNING]
 > When using --use_onnx by default the node will try to instantiate TensorRT engines. They will be saved in `foundationpose/weights/onnx/trt_cache`.

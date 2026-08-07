@@ -245,7 +245,10 @@ RUN pip install --no-cache-dir "${ONNXRUNTIME_GPU_WHL}" onnx && \
 RUN pip install --no-cache-dir huggingface_hub \
     "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183"
 
-###### Ultralytics detectors (YOLOE / SAM3)
+###### Qwen3.5 VLM (optional --seg_model_type qwen_sam2 in node.py)
+RUN pip install --no-cache-dir accelerate "git+https://github.com/huggingface/transformers.git@main"
+
+###### Ultralytics detectors (YOLOE / SAM3 / SAM2)
 # Blank pass so the pip installs and checkpoint downloads that ultralytics performs on
 # first use happen here instead of at node startup. Needs network access (`--network host`).
 # SAM3 weights are gated on Hugging Face: that part only warns and is done at runtime.

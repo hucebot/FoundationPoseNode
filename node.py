@@ -1,6 +1,8 @@
 """
 FoundationPose ROS2 node: subscribes to compressed RGB and depth images,
-runs open-vocabulary object segmentation (YOLOE or SAM3) and 6-DoF pose estimation (register + track).
+runs open-vocabulary object segmentation (YOLOE, SAM3, or Qwen+SAM2) and 6-DoF pose estimation (register + track).
+Use --no_fp to skip pose estimation at runtime (detection/segmentation only; models still load).
+Qwen+SAM2 modes: qwen_sam2_detect (bbox prompt) and qwen_sam2_point (point prompt); with --publish_mask_image draw the prompt on the mask image.
 
 Requires: ROS2 (rclpy), sensor_msgs, geometry_msgs, message_filters.
 Run from workspace: python run_demo_ros2.py
@@ -26,8 +28,10 @@ Publishes:
 """
 
 import argparse
+import json
 import math
 import os
+import re
 import sys
 import time
 import threading
@@ -45,11 +49,12 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool, String
 from visualization_msgs.msg import Marker
 from message_filters import Subscriber, ApproximateTimeSynchronizer
+from PIL import Image as PILImage
 
 from foundationpose.estimater import *
 from sensor_msgs.msg import Image as RosImage  # after estimater * (PIL.Image otherwise shadows)
 from ultralytics import YOLOE
-from ultralytics.models.sam import SAM3SemanticPredictor
+from ultralytics.models.sam import SAM2Predictor, SAM3SemanticPredictor
 
 from scipy.spatial.transform import Rotation
 
@@ -109,6 +114,299 @@ def _biggest_mask_index(masks):
     return int(np.argmax([(m > 0).sum() for m in masks]))
 
 
+def _parse_qwen_bboxes_norm(text: str):
+    """Parse Qwen grounding JSON / bare lists; return list of [x1,y1,x2,y2] in 0-1000 coords."""
+    if not text:
+        return []
+    cleaned = text.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```", 1)[1].split("```", 1)[0].strip()
+
+    candidates = []
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            data = [data]
+        if isinstance(data, list):
+            # Bare [x1,y1,x2,y2]
+            if len(data) == 4 and all(isinstance(v, (int, float)) for v in data):
+                candidates.append([float(v) for v in data])
+            else:
+                for item in data:
+                    if isinstance(item, dict) and "bbox_2d" in item:
+                        bbox = item["bbox_2d"]
+                        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                            candidates.append([float(v) for v in bbox])
+                    elif isinstance(item, (list, tuple)) and len(item) == 4:
+                        candidates.append([float(v) for v in item])
+    except Exception:
+        pass
+
+    if not candidates:
+        for match in re.finditer(
+            r'"bbox_2d"\s*:\s*\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]',
+            text,
+        ):
+            candidates.append([float(match.group(i)) for i in range(1, 5)])
+    if not candidates:
+        for match in re.finditer(
+            r'\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]',
+            text,
+        ):
+            candidates.append([float(match.group(i)) for i in range(1, 5)])
+    return candidates
+
+
+def _parse_qwen_points_norm(text: str):
+    """Parse Qwen grounding JSON / bare lists; return list of [x,y] in 0-1000 coords."""
+    if not text:
+        return []
+    cleaned = text.strip()
+    if "```json" in cleaned:
+        cleaned = cleaned.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in cleaned:
+        cleaned = cleaned.split("```", 1)[1].split("```", 1)[0].strip()
+
+    candidates = []
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            data = [data]
+        if isinstance(data, list):
+            # Bare [x,y]
+            if len(data) == 2 and all(isinstance(v, (int, float)) for v in data):
+                candidates.append([float(v) for v in data])
+            else:
+                for item in data:
+                    if isinstance(item, dict) and "point_2d" in item:
+                        pt = item["point_2d"]
+                        if isinstance(pt, (list, tuple)) and len(pt) == 2:
+                            candidates.append([float(v) for v in pt])
+                    elif isinstance(item, (list, tuple)) and len(item) == 2:
+                        candidates.append([float(v) for v in item])
+    except Exception:
+        pass
+
+    if not candidates:
+        for match in re.finditer(
+            r'"point_2d"\s*:\s*\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]',
+            text,
+        ):
+            candidates.append([float(match.group(1)), float(match.group(2))])
+    if not candidates:
+        for match in re.finditer(
+            r'\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]',
+            text,
+        ):
+            candidates.append([float(match.group(1)), float(match.group(2))])
+    return candidates
+
+
+def _norm1000_bbox_to_xyxy(bbox_norm, width: int, height: int):
+    """Convert a Qwen 0-1000 bbox to clipped integer pixel xyxy."""
+    x1 = int(round(bbox_norm[0] / 1000.0 * width))
+    y1 = int(round(bbox_norm[1] / 1000.0 * height))
+    x2 = int(round(bbox_norm[2] / 1000.0 * width))
+    y2 = int(round(bbox_norm[3] / 1000.0 * height))
+    x1 = max(0, min(width - 1, x1))
+    x2 = max(0, min(width - 1, x2))
+    y1 = max(0, min(height - 1, y1))
+    y2 = max(0, min(height - 1, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return [x1, y1, x2, y2]
+
+
+def _norm1000_point_to_xy(point_norm, width: int, height: int):
+    """Convert a Qwen 0-1000 point to clipped integer pixel xy."""
+    x = int(round(point_norm[0] / 1000.0 * width))
+    y = int(round(point_norm[1] / 1000.0 * height))
+    x = max(0, min(width - 1, x))
+    y = max(0, min(height - 1, y))
+    return [x, y]
+
+
+def _qwen_prompt_for_mode(vlm_prompt: str, seg_model_type: str):
+    """Detect mode keeps Detect; point mode swaps Detect -> Locate."""
+    if seg_model_type == "qwen_sam2_point":
+        return vlm_prompt.replace("Detect", "Locate")
+    return vlm_prompt
+
+
+def _qwen_special_token_id(processor, token_str: str, fallback: int):
+    """Resolve a special token id from the processor/tokenizer, else use fallback."""
+    tok = getattr(processor, "tokenizer", processor)
+    convert = getattr(tok, "convert_tokens_to_ids", None)
+    if convert is None:
+        return fallback
+    tid = convert(token_str)
+    unk = getattr(tok, "unk_token_id", None)
+    if tid is None or tid < 0 or (unk is not None and tid == unk):
+        return fallback
+    return int(tid)
+
+
+def _qwen_generate_kwargs():
+    """Shared sampling kwargs for Qwen generate calls."""
+    return dict(
+        do_sample=True,
+        temperature=0.7,
+        top_p=0.80,
+        top_k=20,
+        min_p=0.0,
+        repetition_penalty=1.0,
+    )
+
+
+def _qwen_generate(
+    processor,
+    model,
+    color_rgb: np.ndarray,
+    full_prompt: str,
+    max_new_tokens: int = 128,
+    thinking_budget: int = 256,
+    logger=None,
+):
+    """Run Qwen VLM; return (answer_text, thinking_text).
+
+    Thinking budget is applied as a single-shot max_new_tokens cap
+    (thinking_budget + answer tokens). Two-stage early-stop continuation
+    is unsafe for Qwen3.5 multimodal (rope/mask shape mismatch).
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": PILImage.fromarray(color_rgb)},
+                {"type": "text", "text": full_prompt},
+            ],
+        }
+    ]
+    # ProcessorMixin expects conversation as the first positional arg (not messages=)
+    chat_kwargs = dict(
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
+    try:
+        inputs = processor.apply_chat_template(messages, enable_thinking=True, **chat_kwargs)
+    except TypeError:
+        inputs = processor.apply_chat_template(messages, **chat_kwargs)
+    inputs = inputs.to(model.device)
+    input_len = inputs["input_ids"].shape[-1]
+    sample_kwargs = _qwen_generate_kwargs()
+    total_max_new_tokens = max(thinking_budget, 0) + max(max_new_tokens, 1)
+    think_end_id = _qwen_special_token_id(processor, "</think>", 151668)
+
+    with torch.inference_mode():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=total_max_new_tokens,
+            **sample_kwargs,
+        )
+    output_ids = generated_ids[0][input_len:].tolist()
+
+    # Prefer the final answer after the last </think>
+    try:
+        answer_start = len(output_ids) - output_ids[::-1].index(think_end_id)
+    except ValueError:
+        answer_start = 0
+    thinking_text = ""
+    if answer_start > 0:
+        thinking_text = processor.decode(output_ids[:answer_start], skip_special_tokens=True).strip()
+        # Model sometimes emits a literal "</think>" string inside the thinking span
+        thinking_text = thinking_text.replace("</think>", "").strip()
+    answer_text = processor.decode(output_ids[answer_start:], skip_special_tokens=True).strip()
+    return answer_text, thinking_text
+
+
+def qwen_predict_bbox_xyxy(
+    processor,
+    model,
+    color_rgb: np.ndarray,
+    vlm_prompt: str,
+    max_new_tokens: int = 128,
+    thinking_budget: int = 256,
+    logger=None,
+):
+    """Ask Qwen for a bbox; return (xyxy_pixels or None, raw_text)."""
+    h, w = color_rgb.shape[:2]
+    full_prompt = (
+        f"{vlm_prompt}. "
+        "Return their locations in the form of coordinates in the format "
+        "{'bbox_2d': [x1, y1, x2, y2], label: 'object_name'}."
+    )
+    raw_text, thinking_text = _qwen_generate(
+        processor,
+        model,
+        color_rgb,
+        full_prompt,
+        max_new_tokens=max_new_tokens,
+        thinking_budget=thinking_budget,
+        logger=logger,
+    )
+    if logger is not None:
+        if thinking_text:
+            logger.info(f"Qwen thinking: {thinking_text}")
+        logger.info(f"Qwen raw text: {raw_text}")
+    bboxes_norm = _parse_qwen_bboxes_norm(raw_text)
+    if not bboxes_norm and thinking_text:
+        bboxes_norm = _parse_qwen_bboxes_norm(thinking_text)
+    if not bboxes_norm:
+        return None, raw_text
+
+    # Prefer the largest box when several are returned
+    xyxy_list = []
+    for bbox_norm in bboxes_norm:
+        xyxy = _norm1000_bbox_to_xyxy(bbox_norm, w, h)
+        if xyxy is not None:
+            xyxy_list.append(xyxy)
+    if not xyxy_list:
+        return None, raw_text
+    areas = [(b[2] - b[0]) * (b[3] - b[1]) for b in xyxy_list]
+    return xyxy_list[int(np.argmax(areas))], raw_text
+
+
+def qwen_predict_point_xy(
+    processor,
+    model,
+    color_rgb: np.ndarray,
+    vlm_prompt: str,
+    max_new_tokens: int = 128,
+    thinking_budget: int = 256,
+    logger=None,
+):
+    """Ask Qwen for a single point; return (xy_pixels or None, raw_text)."""
+    h, w = color_rgb.shape[:2]
+    full_prompt = (
+        f"{vlm_prompt}. "
+        "Return their locations in the form of coordinates in the format "
+        "{'point_2d': [x, y], label: 'object_name'}."
+    )
+    raw_text, thinking_text = _qwen_generate(
+        processor,
+        model,
+        color_rgb,
+        full_prompt,
+        max_new_tokens=max_new_tokens,
+        thinking_budget=thinking_budget,
+        logger=logger,
+    )
+    if logger is not None:
+        if thinking_text:
+            logger.info(f"Qwen thinking: {thinking_text}")
+        logger.info(f"Qwen raw text: {raw_text}")
+    points_norm = _parse_qwen_points_norm(raw_text)
+    if not points_norm and thinking_text:
+        points_norm = _parse_qwen_points_norm(thinking_text)
+    if not points_norm:
+        return None, raw_text
+    # Prefer the first valid point (prompt asks for a single location)
+    return _norm1000_point_to_xy(points_norm[0], w, h), raw_text
+
 
 def symmetry_tfs_from_angles(x_angles_str=None, y_angles_str=None, z_angles_str=None):
     """
@@ -149,6 +447,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                   "symmetry_y_angles": "0,180",
                   "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
                   "target_object": "bread",
+                  "vlm_prompt": "Detect the bread",
                   "constraint_yaw_in": 0,
                   "constraint_pitch_in": [0,180],
                   "constraint_roll_in": [0,180]},
@@ -159,6 +458,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "symmetry_y_angles": "",
                 "symmetry_z_angles": "",
                 "target_object": "banana",
+                "vlm_prompt": "Detect the banana",
                 "constraint_yaw_in": None,
                 "constraint_pitch_in": None,
                 "constraint_roll_in": None},
@@ -169,6 +469,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                    "symmetry_y_angles": "",
                    "symmetry_z_angles": "",
                    "target_object": "blue container",
+                   "vlm_prompt": "Detect the blue container",
                    "constraint_yaw_in": 0,
                    "constraint_pitch_in": None,
                    "constraint_roll_in": None},
@@ -179,6 +480,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
              "symmetry_y_angles": "0,180",
              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
              "target_object": "egg",
+             "vlm_prompt": "Detect the egg",
              "constraint_yaw_in": 0,
              "constraint_pitch_in": 0,
              "constraint_roll_in": 0},
@@ -189,6 +491,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                    "symmetry_y_angles": "",
                    "symmetry_z_angles": "",
                    "target_object": "yellow mug",
+                   "vlm_prompt": "Detect the yellow mug",
                    "constraint_yaw_in": None,
                    "constraint_pitch_in": None,
                    "constraint_roll_in": None},
@@ -199,6 +502,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
              "symmetry_y_angles": "",
              "symmetry_z_angles": "",
              "target_object": "orange jam",
+             "vlm_prompt": "Detect the orange jam",
              "constraint_yaw_in": None,
              "constraint_pitch_in": None,
              "constraint_roll_in": None},
@@ -209,6 +513,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
               "symmetry_y_angles": "",
               "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
               "target_object": "white bottle",
+              "vlm_prompt": "Detect the white bottle",
               "constraint_yaw_in": 0,
               "constraint_pitch_in": None,
               "constraint_roll_in": None},
@@ -219,6 +524,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                     "symmetry_y_angles": "",
                     "symmetry_z_angles": "",
                     "target_object": "triangle cheese",
+                    "vlm_prompt": "Detect the triangle cheese",
                     "constraint_yaw_in": None,
                     "constraint_pitch_in": None,
                     "constraint_roll_in": None},
@@ -229,6 +535,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
              "symmetry_y_angles": "",
              "symmetry_z_angles": "",
              "target_object": "pan",
+             "vlm_prompt": "Detect the pan",
              "constraint_yaw_in": None,
              "constraint_pitch_in": None,
              "constraint_roll_in": None},
@@ -239,6 +546,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                   "symmetry_y_angles": "0,180",
                   "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
                   "target_object": "red apple",
+                  "vlm_prompt": "Detect the red apple",
                   "constraint_yaw_in": 0,
                   "constraint_pitch_in": 0,
                   "constraint_roll_in": 0},
@@ -248,6 +556,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                    "symmetry_y_angles": "",
                    "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
                    "target_object": "white bottle",
+                   "vlm_prompt": "Detect the white bottle",
                    "constraint_yaw_in": 0,
                    "constraint_pitch_in": None,
                    "constraint_roll_in": None},
@@ -257,6 +566,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                             "symmetry_y_angles": "",
                             "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
                             "target_object": "green bottle",
+                            "vlm_prompt": "Detect the green bottle",
                             "constraint_yaw_in": 0,
                             "constraint_pitch_in": None,
                             "constraint_roll_in": None},
@@ -267,6 +577,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
               "symmetry_y_angles": "",
               "symmetry_z_angles": "",
               "target_object": "blue container",
+              "vlm_prompt": "Detect the blue container",
               "constraint_yaw_in": [0,180],
               "constraint_pitch_in": [0,180],
               "constraint_roll_in": [0,180]},
@@ -277,6 +588,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                     "symmetry_y_angles": "",
                     "symmetry_z_angles": "",
                     "target_object": "yellow bottle",
+                    "vlm_prompt": "Detect the yellow bottle",
                     "constraint_yaw_in": [0,180],
                     "constraint_pitch_in": None,
                     "constraint_roll_in": None},
@@ -286,15 +598,17 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "symmetry_y_angles": "",
                 "symmetry_z_angles": "0,90,180,270",
                 "target_object": "carton bottle",
+                "vlm_prompt": "Detect the carton bottle",
                 "constraint_yaw_in": [0,90],
                 "constraint_pitch_in": None,
                 "constraint_roll_in": None},
-    
+
     "redcup" : {"mesh_file": "./assets/hackathon3/redcup/redcup.obj",
                    "symmetry_x_angles": "",
                    "symmetry_y_angles": "",
                    "symmetry_z_angles": "",
                    "target_object": "red mug",
+                   "vlm_prompt": "Detect the red mug",
                    "constraint_yaw_in": None,
                    "constraint_pitch_in": None,
                    "constraint_roll_in": None},
@@ -304,6 +618,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                    "symmetry_y_angles": "",
                    "symmetry_z_angles": "",
                    "target_object": "fruit basket",
+                   "vlm_prompt": "Detect the fruit basket",
                    "constraint_yaw_in": None,
                    "constraint_pitch_in": None,
                    "constraint_roll_in": None},
@@ -313,6 +628,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
               "symmetry_y_angles": "",
               "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
               "target_object": "green bottle",
+              "vlm_prompt": "Detect the green bottle",
               "constraint_yaw_in": 0,
               "constraint_pitch_in": None,
               "constraint_roll_in": None},
@@ -322,6 +638,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
               "symmetry_y_angles": "",
               "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
               "target_object": "green bottle",
+              "vlm_prompt": "Detect the green bottle",
               "constraint_yaw_in": 0,
               "constraint_pitch_in": None,
               "constraint_roll_in": None},
@@ -331,6 +648,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "symmetry_y_angles": "0,180",
                 "symmetry_z_angles": "0,90,180,270",
                 "target_object": "carton bottle",
+                "vlm_prompt": "Detect the carton bottle",
                 "constraint_yaw_in": [0,90],
                 "constraint_pitch_in": [0,180],
                 "constraint_roll_in": [0,180]},
@@ -340,6 +658,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "symmetry_y_angles": "",
                 "symmetry_z_angles": "",
                 "target_object": "black mug",
+                "vlm_prompt": "Detect the black mug",
                 "constraint_yaw_in": None,
                 "constraint_pitch_in": None,
                 "constraint_roll_in": None},
@@ -349,11 +668,24 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "symmetry_y_angles": "",
                 "symmetry_z_angles": "",
                 "target_object": "orange mug",
+                "vlm_prompt": "Detect the orange mug",
                 "constraint_yaw_in": None,
                 "constraint_pitch_in": None,
                 "constraint_roll_in": None},
 
+    "gavottes" : { "mesh_file": "./assets/hackathon3/gavottes/gavottes.obj",
+                "symmetry_x_angles": "0,180",
+                "symmetry_y_angles": "0,180",
+                "symmetry_z_angles": "0,180",
+                "target_object": "carton",
+                "vlm_prompt": "Detect the carton",
+                "constraint_yaw_in": [0,180],
+                "constraint_pitch_in": [0,180],
+                "constraint_roll_in": [0,180]},
+
     }
+
+
 class FoundationPoseROS2Node(Node):
     def __init__(self, args):
         super().__init__("foundation_pose_node")
@@ -435,11 +767,15 @@ class FoundationPoseROS2Node(Node):
         self.resize_factor = args.resize_factor
         self.min_initial_detection_counter = args.min_initial_detection_counter
         self.enable_pose_tracking = args.enable_pose_tracking
+        self.no_fp = args.no_fp
         self.publish_mask_image = args.publish_mask_image
         self.publish_moge_depth = args.publish_moge_depth
         self.moge_depth_topic = args.moge_depth_topic
         self.seg_model_type = args.seg_model_type
         self.yoloe_conf = args.yoloe_conf
+        self.qwen_model_name = args.qwen_model
+        self.qwen_thinking_budget = args.qwen_thinking_budget
+        self.vlm_prompt = args.vlm_prompt
         self.multiple_object_method = args.multiple_object_method
         self.symmetry_x_angles = args.symmetry_x_angles
         self.symmetry_y_angles = args.symmetry_y_angles
@@ -463,9 +799,12 @@ class FoundationPoseROS2Node(Node):
             raise ValueError("--publish_moge_depth requires --depth_source moge")
 
         # Make some checks on the parameters
-        assert(self.seg_model_type in ["sam3", "yoloe"]), f"Invalid segmentation model type: {self.seg_model_type}"
+        assert(self.seg_model_type in ["sam3", "yoloe", "qwen_sam2_detect", "qwen_sam2_point"]), f"Invalid segmentation model type: {self.seg_model_type}"
         if self.seg_model_type == "sam3":
             self.seg_model_name = "sam3.pt"
+        elif self.seg_model_type in ("qwen_sam2_detect", "qwen_sam2_point"):
+            if "sam2" not in self.seg_model_name:
+                self.seg_model_name = "sam2_s.pt"
         elif self.seg_model_type == "yoloe":
             assert("yoloe" in self.seg_model_name), f"Invalid YOLOE model name: {self.seg_model_name}"
 
@@ -474,6 +813,7 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Object key: {self.object_key}")
         self.get_logger().debug(f"Mesh file: {self.mesh_file}")
         self.get_logger().debug(f"Target object: {self.target_object}")
+        self.get_logger().debug(f"VLM prompt: {self.vlm_prompt}")
         self.get_logger().debug(f"Est refine iter: {self.est_refine_iter}")
         self.get_logger().debug(f"Track refine iter: {self.track_refine_iter}")
         self.get_logger().debug(f"Debug: {self.debug}")
@@ -485,8 +825,11 @@ class FoundationPoseROS2Node(Node):
         self.get_logger().debug(f"Resize factor: {self.resize_factor}")
         self.get_logger().debug(f"Min initial detection counter: {self.min_initial_detection_counter}")
         self.get_logger().debug(f"YOLOE confidence threshold: {self.yoloe_conf}")
+        self.get_logger().debug(f"Qwen model: {self.qwen_model_name}")
+        self.get_logger().debug(f"Qwen thinking budget: {self.qwen_thinking_budget}")
         self.get_logger().debug(f"Multiple object method: {self.multiple_object_method}")
         self.get_logger().debug(f"Enable pose tracking: {self.enable_pose_tracking}")
+        self.get_logger().debug(f"No FoundationPose (--no_fp): {self.no_fp}")
         self.get_logger().debug(f"Publish mask image: {self.publish_mask_image}")
         self.get_logger().debug(f"Publish MoGe depth: {self.publish_moge_depth}")
         self.get_logger().debug(f"Symmetry x angles: {self.symmetry_x_angles}")
@@ -535,6 +878,8 @@ class FoundationPoseROS2Node(Node):
 
         # Initialize segmentation / detection model
         self.get_logger().info(f"Initializing segmentation model {self.seg_model_type} ({self.seg_model_name})...")
+        self.vlm_processor = None
+        self.vlm_model = None
         if self.seg_model_type == "sam3":
             # Initialize predictor with configuration
             overrides = dict(
@@ -551,6 +896,36 @@ class FoundationPoseROS2Node(Node):
             # run a fake pass to warm up the model
             self.seg_model.set_image(np.zeros((1080, 1920, 3), dtype=np.uint8))
             self.seg_model(text=[self.target_object], verbose=False)
+        elif self.seg_model_type in ("qwen_sam2_detect", "qwen_sam2_point"):
+            # Qwen locates a bbox or point; SAM2 prompt turns that into a mask (lighter than SAM3)
+            from transformers import AutoModelForMultimodalLM, AutoProcessor
+
+            self.get_logger().info(f"Loading Qwen VLM {self.qwen_model_name}...")
+            self.vlm_processor = AutoProcessor.from_pretrained(self.qwen_model_name)
+            dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+            self.vlm_model = AutoModelForMultimodalLM.from_pretrained(
+                self.qwen_model_name,
+                torch_dtype=dtype,
+                device_map="cuda" if torch.cuda.is_available() else "cpu",
+            )
+            self.vlm_model.eval()
+            self.get_logger().info(f"Qwen VLM ready (dtype={dtype}, mode={self.seg_model_type})")
+
+            overrides = dict(
+                conf=0.25,
+                task="segment",
+                mode="predict",
+                model=self.seg_model_name,
+                half=True,
+                save=False,
+                verbose=False,
+            )
+            self.seg_model = SAM2Predictor(overrides=overrides)
+            self.seg_model.set_image(np.zeros((1080, 1920, 3), dtype=np.uint8))
+            if self.seg_model_type == "qwen_sam2_point":
+                self.seg_model(points=[[200, 250]], labels=[1])
+            else:
+                self.seg_model(bboxes=[[100, 100, 300, 400]])
         elif self.seg_model_type == "yoloe":
             # open vocabulary: the target object is given as a text prompt, no fixed class list
             self.seg_model = YOLOE(self.seg_model_name)
@@ -800,6 +1175,7 @@ class FoundationPoseROS2Node(Node):
             self.symmetry_y_angles = OBJECT_KEYS_TO_PARAMETERS[key_name].get("symmetry_y_angles", "")
             self.symmetry_z_angles = OBJECT_KEYS_TO_PARAMETERS[key_name]["symmetry_z_angles"]
             self.target_object = OBJECT_KEYS_TO_PARAMETERS[key_name]["target_object"]
+            self.vlm_prompt = OBJECT_KEYS_TO_PARAMETERS[key_name]["vlm_prompt"]
             if self.seg_model_type == "yoloe":
                 self.seg_model.set_classes([self.target_object])
             self.constraint_yaw_in = OBJECT_KEYS_TO_PARAMETERS[key_name].get("constraint_yaw_in")
@@ -874,9 +1250,10 @@ class FoundationPoseROS2Node(Node):
         else:
             # just a change of target object, any text prompt is valid with an open vocabulary model
             self.target_object = new_target
+            self.vlm_prompt = f"Detect the {self.target_object}"
             if self.seg_model_type == "yoloe":
                 self.seg_model.set_classes([self.target_object])
-            self.get_logger().info(f"Target object changed to: {self.target_object}")
+            self.get_logger().info(f"Target object changed to: {self.target_object} (vlm_prompt={self.vlm_prompt})")
 
             # Reset tracking so we detect the new object from scratch
             if self.current_phase in ("PoseTracking", "StartPoseTracking", "DetectingAgain"):
@@ -927,9 +1304,12 @@ class FoundationPoseROS2Node(Node):
         msg.data = depth_u16.tobytes()
         self._moge_depth_pub.publish(msg)
 
-    def _publish_mask_image(self, rgb, masks, header):
-        """Overlay one color per mask on rgb (HxWx3) and publish as raw Image."""
-        if self._mask_image_pub is None or masks is None or len(masks) == 0:
+    def _publish_mask_image(self, rgb, masks, header, bboxes=None, points=None):
+        """Overlay masks and/or xyxy bboxes / points on rgb (HxWx3) and publish as raw Image."""
+        mask_list = [] if masks is None else list(masks)
+        bbox_list = [] if bboxes is None else [b for b in bboxes if b is not None and len(b) == 4]
+        point_list = [] if points is None else [p for p in points if p is not None and len(p) == 2]
+        if self._mask_image_pub is None or (len(mask_list) == 0 and len(bbox_list) == 0 and len(point_list) == 0):
             return
         t0 = time.time()
         vis = rgb.copy()
@@ -937,7 +1317,7 @@ class FoundationPoseROS2Node(Node):
             (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
             (255, 0, 255), (0, 255, 255), (255, 128, 0), (128, 0, 255),
         ]
-        for i, mask in enumerate(masks):
+        for i, mask in enumerate(mask_list):
             m = np.asarray(mask)
             if m.ndim == 3:
                 m = m[0]
@@ -949,6 +1329,17 @@ class FoundationPoseROS2Node(Node):
             color = np.array(colors[i % len(colors)], dtype=np.float32)
             vis[sel] = (0.45 * vis[sel].astype(np.float32) + 0.55 * color).astype(np.uint8)
 
+        for i, bbox in enumerate(bbox_list):
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            box_color = colors[i % len(colors)]
+            cv2.rectangle(vis, (x1, y1), (x2, y2), box_color, 2)
+
+        for i, pt in enumerate(point_list):
+            x, y = int(pt[0]), int(pt[1])
+            pt_color = colors[i % len(colors)]
+            cv2.circle(vis, (x, y), 8, pt_color, 2)
+            cv2.drawMarker(vis, (x, y), pt_color, markerType=cv2.MARKER_CROSS, markerSize=16, thickness=2)
+
         vis = np.ascontiguousarray(vis)
         msg = RosImage()
         msg.header = header
@@ -959,7 +1350,10 @@ class FoundationPoseROS2Node(Node):
         msg.step = vis.shape[1] * 3
         msg.data = vis.tobytes()
         self._mask_image_pub.publish(msg)
-        self.get_logger().debug(f"Publish mask image: {(time.time()-t0)*1000:.2f} ms ({len(masks)} mask(s))")
+        self.get_logger().debug(
+            f"Publish mask image: {(time.time()-t0)*1000:.2f} ms "
+            f"({len(mask_list)} mask(s), {len(bbox_list)} bbox(es), {len(point_list)} point(s))"
+        )
 
     def _camera_info_cb(self, msg: CameraInfo):
         if self.K is not None:
@@ -1146,6 +1540,104 @@ class FoundationPoseROS2Node(Node):
                 else:
                     self.initial_detection_counter = 0
 
+            elif self.seg_model_type in ("qwen_sam2_detect", "qwen_sam2_point"):
+                # Qwen -> bbox or point, then SAM2 prompt -> mask
+                target_mask = None
+                try:
+                    use_point = self.seg_model_type == "qwen_sam2_point"
+                    qwen_prompt = _qwen_prompt_for_mode(self.vlm_prompt, self.seg_model_type)
+                    qwen_t0 = time.time()
+                    if use_point:
+                        prompt_xy, qwen_text = qwen_predict_point_xy(
+                            self.vlm_processor,
+                            self.vlm_model,
+                            color,
+                            qwen_prompt,
+                            thinking_budget=self.qwen_thinking_budget,
+                            logger=self.get_logger(),
+                        )
+                    else:
+                        prompt_xy, qwen_text = qwen_predict_bbox_xyxy(
+                            self.vlm_processor,
+                            self.vlm_model,
+                            color,
+                            qwen_prompt,
+                            thinking_budget=self.qwen_thinking_budget,
+                            logger=self.get_logger(),
+                        )
+                    qwen_ms = (time.time() - qwen_t0) * 1000.0
+                    prompt_kind = "point" if use_point else "bbox"
+                    if prompt_xy is None:
+                        self.get_logger().warn(
+                            f"Frame {self.rgbd_frames_counter_processed}: Qwen found no {prompt_kind} "
+                            f"(prompt={qwen_prompt!r}, {qwen_ms:.1f} ms). Raw: {qwen_text!r}"
+                        )
+                        self.initial_detection_counter = 0
+                    else:
+                        self.get_logger().info(
+                            f"Frame {self.rgbd_frames_counter_processed}: Qwen {prompt_kind}={prompt_xy} "
+                            f"({qwen_ms:.1f} ms, prompt={qwen_prompt!r})"
+                        )
+                        sam_t0 = time.time()
+                        self.seg_model.set_image(color)
+                        if use_point:
+                            results = self.seg_model(points=[prompt_xy], labels=[1])
+                        else:
+                            results = self.seg_model(bboxes=[prompt_xy])
+                        sam_ms = (time.time() - sam_t0) * 1000.0
+                        n_masks = len(results[0].masks) if results is not None and results[0].masks is not None else 0
+                        sam_prompt = "point" if use_point else "box"
+                        self.get_logger().info(
+                            f"Frame {self.rgbd_frames_counter_processed}: SAM2({sam_prompt}) found {n_masks} mask(s), "
+                            f"latency: {sam_ms:.2f} ms (Qwen+SAM2 total {(qwen_ms + sam_ms):.1f} ms)"
+                        )
+                        pub_bboxes = None if use_point else [prompt_xy]
+                        pub_points = [prompt_xy] if use_point else None
+                        if results is None or results[0].masks is None or n_masks == 0:
+                            self.get_logger().error(
+                                f"No SAM2 mask from Qwen {prompt_kind} for frame {self.rgbd_frames_counter_processed}"
+                            )
+                            if self.publish_mask_image:
+                                self._publish_mask_image(
+                                    color, [], color_msg.header, bboxes=pub_bboxes, points=pub_points
+                                )
+                            self.initial_detection_counter = 0
+                        else:
+                            target_masks = results[0].masks
+                            found_obects = len(target_masks)
+                            if self.publish_mask_image:
+                                masks_list = [target_masks[i].data.cpu().numpy()[0] for i in range(found_obects)]
+                                self._publish_mask_image(
+                                    color, masks_list, color_msg.header, bboxes=pub_bboxes, points=pub_points
+                                )
+                            if found_obects == 1:
+                                self.initial_detection_counter = self.min_initial_detection_counter
+                                target_mask = target_masks[0].data.cpu().numpy()[0].astype(np.uint8)
+                            elif found_obects > 1:
+                                if self.multiple_object_method == "biggest":
+                                    masks_np = [target_masks[i].data.cpu().numpy()[0] for i in range(found_obects)]
+                                    best_idx = _biggest_mask_index(masks_np)
+                                    target_mask = masks_np[best_idx].astype(np.uint8)
+                                    self.initial_detection_counter = self.min_initial_detection_counter
+                                    self.get_logger().info(
+                                        f"Multiple SAM2 masks ({found_obects}); selected biggest idx={best_idx} "
+                                        f"({int((target_mask > 0).sum())} px)"
+                                    )
+                                else:
+                                    self.get_logger().warn(
+                                        f"Multiple SAM2 masks ({found_obects}) in frame "
+                                        f"{self.rgbd_frames_counter_processed}, cannot chose"
+                                    )
+                                    self.initial_detection_counter = 0
+                            else:
+                                self.initial_detection_counter = 0
+                except Exception as e:
+                    self.get_logger().error(
+                        f"Frame {self.rgbd_frames_counter_processed}: Qwen/SAM2 failed, skipping frame: {e}"
+                    )
+                    self.initial_detection_counter = 0
+                    target_mask = None
+
             elif self.seg_model_type == "yoloe":
                 # the model is already prompted with self.target_object, so every returned mask is a candidate
                 target_mask = None
@@ -1188,30 +1680,35 @@ class FoundationPoseROS2Node(Node):
 
             if self.initial_detection_counter >= self.min_initial_detection_counter:
                 self.initial_detection_counter = 0
-                self.current_phase = "PoseEstimation"
-                est_timer_start = time.time()
-                # print(f"target_mask.shape: {target_mask.shape}, dtype: {target_mask.dtype}, min: {target_mask.min()}, max: {target_mask.max()}")
-                target_mask = cv2.resize(target_mask, (color.shape[1], color.shape[0]), interpolation=cv2.INTER_NEAREST)
-                target_mask = (target_mask > 0).astype(bool)
-                pose = self.est.register(
-                    K=self.K,
-                    rgb=color,
-                    depth=depth,
-                    ob_mask=target_mask,
-                    iteration=self.est_refine_iter,
-                    ros_logger=self.get_logger(),
-                )
-                valid_pose = True # always True for now
-                est_timer_end = time.time()
-                self.get_logger().info(f"Frame {self.rgbd_frames_counter_processed}: Pose estimation time {(est_timer_end - est_timer_start)*1000:.2f} ms")
-                
-                if self.enable_pose_tracking:
-                    # if not enabled, we will just go back to running again detections and pose estimation
-                    self.current_phase = "StartPoseTracking"
-                    self.get_logger().info(f"Starting tracking with {self.target_object}")
+                if self.no_fp:
+                    self.get_logger().debug(
+                        f"Frame {self.rgbd_frames_counter_processed}: skipping FoundationPose (--no_fp)"
+                    )
+                else:
+                    self.current_phase = "PoseEstimation"
+                    est_timer_start = time.time()
+                    # print(f"target_mask.shape: {target_mask.shape}, dtype: {target_mask.dtype}, min: {target_mask.min()}, max: {target_mask.max()}")
+                    target_mask = cv2.resize(target_mask, (color.shape[1], color.shape[0]), interpolation=cv2.INTER_NEAREST)
+                    target_mask = (target_mask > 0).astype(bool)
+                    pose = self.est.register(
+                        K=self.K,
+                        rgb=color,
+                        depth=depth,
+                        ob_mask=target_mask,
+                        iteration=self.est_refine_iter,
+                        ros_logger=self.get_logger(),
+                    )
+                    valid_pose = True # always True for now
+                    est_timer_end = time.time()
+                    self.get_logger().info(f"Frame {self.rgbd_frames_counter_processed}: Pose estimation time {(est_timer_end - est_timer_start)*1000:.2f} ms")
+
+                    if self.enable_pose_tracking:
+                        # if not enabled, we will just go back to running again detections and pose estimation
+                        self.current_phase = "StartPoseTracking"
+                        self.get_logger().info(f"Starting tracking with {self.target_object}")
 
 
-        elif self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking":
+        elif (not self.no_fp) and (self.current_phase == "PoseTracking" or self.current_phase == "StartPoseTracking"):
             self.current_phase = "PoseTracking"
             # perform tracking
             self.get_logger().info("Starting pose tracking")
@@ -1363,13 +1860,16 @@ if __name__ == "__main__":
     parser.add_argument("--moge_depth_topic", type=str, default="/foundation_pose/moge_depth/image_raw", help="Topic for published MoGe depth image_raw.")
     parser.add_argument("--camera_name", type=str, default="realsense_head_front", help="Camera name.")
     parser.add_argument("--slop", type=float, default=1.0, help="Slop.")
-    parser.add_argument("--seg_model_type", type=str, default="yoloe", choices=["yoloe", "sam3"], help="Segmentation model type, both are open vocabulary.")
-    parser.add_argument("--seg_model_name", type=str, default="yoloe-26s-seg.pt", help="Segmentation model name (ignored for sam3).")
+    parser.add_argument("--seg_model_type", type=str, default="yoloe", choices=["yoloe", "sam3", "qwen_sam2_detect", "qwen_sam2_point"], help="Segmentation backend: yoloe, sam3 text, qwen_sam2_detect (Qwen bbox + SAM2), or qwen_sam2_point (Qwen point + SAM2).")
+    parser.add_argument("--seg_model_name", type=str, default="yoloe-26s-seg.pt", help="Segmentation weights (YOLOE checkpoint, or SAM2 e.g. sam2_s.pt for qwen_sam2_*; ignored for sam3).")
     parser.add_argument("--yoloe_conf", type=float, default=0.15, help="Confidence threshold for the YOLOE detections.")
+    parser.add_argument("--qwen_model", type=str, default="Qwen/Qwen3.5-0.8B", help="Hugging Face id or path for the Qwen VLM used by qwen_sam2_*.")
+    parser.add_argument("--qwen_thinking_budget", type=int, default=256, help="Max thinking tokens for Qwen before forcing the final answer (0 disables the budget stage).")
     parser.add_argument("--multiple_object_method", type=str, default="none", choices=["none", "biggest"], help="When multiple objects are detected: 'none' skips the frame, 'biggest' keeps the mask with the most pixels.")
     parser.add_argument("--resize_factor", type=int, default=1, help="Resize factor to divide the image size by this factor.")
     parser.add_argument("--min_initial_detection_counter", type=int, default=1, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
+    parser.add_argument("--no_fp", action="store_true", default=False, help="Skip FoundationPose register/track at runtime (still loads models); detection/segmentation only.")
     parser.add_argument("--publish_mask_image", action="store_true", default=False, help="Publish raw RGB Image with colored detection masks for RViz debug.")
     parser.add_argument("--fp_verbosity", type=str, default="warning", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     parser.add_argument("--ros_verbosity", type=str, default="info", help="ROS logger severity (debug/info/warn/error/fatal). Defaults to RCUTILS_LOGGING_SEVERITY or INFO.")
@@ -1383,6 +1883,7 @@ if __name__ == "__main__":
     # Set parameters based on the object key
     args.mesh_file = OBJECT_KEYS_TO_PARAMETERS[args.object_key]["mesh_file"]
     args.target_object = OBJECT_KEYS_TO_PARAMETERS[args.object_key]["target_object"]
+    args.vlm_prompt = OBJECT_KEYS_TO_PARAMETERS[args.object_key]["vlm_prompt"]
     args.symmetry_x_angles = OBJECT_KEYS_TO_PARAMETERS[args.object_key]["symmetry_x_angles"]
     args.symmetry_y_angles = OBJECT_KEYS_TO_PARAMETERS[args.object_key]["symmetry_y_angles"]
     args.symmetry_z_angles = OBJECT_KEYS_TO_PARAMETERS[args.object_key]["symmetry_z_angles"]
