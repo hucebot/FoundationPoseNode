@@ -169,13 +169,13 @@ python initialize_detectors.py --yoloe_models yoloe-26s-seg.pt yoloe-26l-seg.pt
 ## Run
 ```
 bash ./docker/run_container.sh 
-python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --ros_verbosity info --publish_mask_image
+python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --ros_verbosity info --publish_mask_image --multiple_object_method biggest
 ```
 
 ### MoGe depth instead of RealSense
 Requires `moge2_vitb_normal.pt` and `./moge` (see Models above). Subscribes to color + camera_info only; publishes poses in the color optical frame.
 ```
-python node.py --object_key milk --depth_source moge --publish_moge_depth --ros_verbosity info
+python node.py --object_key milk --depth_source moge --publish_moge_depth --ros_verbosity info --multiple_object_method biggest
 ```
 Optional: `--moge_checkpoint ./moge2_vitb_normal.pt`, `--moge_resolution_level 5` (lower is faster), `--moge_no_camera_fov`, `--moge_depth_topic /foundation_pose/moge_depth/image_raw`.
 
@@ -184,7 +184,7 @@ With `--publish_moge_depth`, MoGe depth is published as `sensor_msgs/Image` with
 ### ONNX node (TAO refine/score)
 Same arguments as `node.py`, plus `--use_onnx` so refine/score use the NGC ONNX models via ONNX Runtime:
 ```
-python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --ros_verbosity info --publish_mask_image
+python node.py --resize_factor 2 --object_key milk --seg_model_type sam3 --use_onnx --ros_verbosity info --publish_mask_image --multiple_object_method biggest
 ```
 
 Pre-build TensorRT engines (recommended, avoids multi-minute stalls on first register):
@@ -290,3 +290,12 @@ To launch a realsense camera from the docker :
 ```
 
 If `[camera_name]` is not specified it will default to `realsense_default`
+
+# To use with `rviz2`
+
+Copy assests and layout config
+```
+cp -r ./assets/hackathon3/ /mesh_assets/
+mkdir /root/.rviz2/
+cp default.rviz /root/.rviz2/
+```

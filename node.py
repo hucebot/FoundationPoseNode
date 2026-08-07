@@ -338,6 +338,7 @@ def qwen_predict_bbox_xyxy(
         f"{vlm_prompt}. "
         "Return their locations in the form of coordinates in the format "
         "{'bbox_2d': [x1, y1, x2, y2], label: 'object_name'}."
+        "Use normalized coordinates in the range [0, 1000] and return only a JSON string."
     )
     raw_text, thinking_text = _qwen_generate(
         processor,
@@ -383,8 +384,9 @@ def qwen_predict_point_xy(
     h, w = color_rgb.shape[:2]
     full_prompt = (
         f"{vlm_prompt}. "
-        "Return their locations in the form of coordinates in the format "
+        "Return their locations as a single point in the form of coordinates in the format "
         "{'point_2d': [x, y], label: 'object_name'}."
+        "Use normalized coordinates in the range [0, 1000] and return only a JSON string."
     )
     raw_text, thinking_text = _qwen_generate(
         processor,
@@ -513,7 +515,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
               "symmetry_y_angles": "",
               "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
               "target_object": "white bottle",
-              "vlm_prompt": "Detect the white bottle with a blue cap",
+              "vlm_prompt": "Detect the white bottle with a blue cap and a blue label",
               "constraint_yaw_in": 0,
               "constraint_pitch_in": None,
               "constraint_roll_in": None},
@@ -586,7 +588,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
     "ycbmustard" : {"mesh_file": "./assets/hackathon3/ycbmustard/ycbmustard.obj",
                     "symmetry_x_angles": "",
                     "symmetry_y_angles": "",
-                    "symmetry_z_angles": "",
+                    "symmetry_z_angles": "0,180",
                     "target_object": "yellow bottle",
                     "vlm_prompt": "Detect the yellow mustard bottle",
                     "constraint_yaw_in": [0,180],
