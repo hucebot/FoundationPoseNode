@@ -679,7 +679,7 @@ OBJECT_KEYS_TO_PARAMETERS = {
                 "symmetry_x_angles": "0,180",
                 "symmetry_y_angles": "0,180",
                 "symmetry_z_angles": "0,180",
-                "target_object": "carton",
+                "target_object": "white and blue carton",
                 "vlm_prompt": "Detect the white and blue biscuit carton",
                 "constraint_yaw_in": [0,180],
                 "constraint_pitch_in": [0,180],
