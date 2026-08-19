@@ -270,7 +270,7 @@ ycbmustard
 - `min_initial_detection_counter` : consecutive single-object detections required before starting pose (yoloe)
 - `enable_pose_tracking` : track after first pose; otherwise re-register every frame
 - `no_fp` : skip FoundationPose register/track at runtime (models still load; detection/segmentation only)
-- `publish_mask_image` : publish RGB with colored masks for RViz; for Qwen modes also draws the bbox or point prompt
+- `publish_mask_image` : publish RGB with colored masks for RViz on `/foundation_pose/mask_image` (raw) and `/foundation_pose/mask_image/compressed` (jpeg); for Qwen modes also draws the bbox or point prompt
 - `fp_verbosity` / `ros_verbosity` : FoundationPose / ROS log levels
 - `use_onnx` : use ONNX refine/score instead of default predictors
 - `refiner_onnx` / `scorer_onnx` : optional paths to ONNX models
