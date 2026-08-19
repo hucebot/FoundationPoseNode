@@ -24,6 +24,7 @@ Publishes:
   - /foundation_pose/object_pose (geometry_msgs/PoseStamped)
   - /foundation_pose/object_marker (visualization_msgs/Marker) mesh marker at pose
   - /foundation_pose/mask_image (sensor_msgs/Image) optional debug mask overlay
+  - /foundation_pose/mask_image/compressed (sensor_msgs/CompressedImage) optional debug mask overlay
   - /foundation_pose/moge_depth/image_raw (sensor_msgs/Image 16UC1 mm) optional MoGe depth
 """
 
@@ -1071,10 +1072,16 @@ class FoundationPoseROS2Node(Node):
         )
 
         self._mask_image_pub = None
+        self._mask_image_compressed_pub = None
         if self.publish_mask_image:
             self._mask_image_pub = self.create_publisher(
                 RosImage,
                 "/foundation_pose/mask_image",
+                qos_sensor,
+            )
+            self._mask_image_compressed_pub = self.create_publisher(
+                CompressedImage,
+                "/foundation_pose/mask_image/compressed",
                 qos_sensor,
             )
 
@@ -1327,11 +1334,14 @@ class FoundationPoseROS2Node(Node):
         self._moge_depth_pub.publish(msg)
 
     def _publish_mask_image(self, rgb, masks, header, bboxes=None, points=None):
-        """Overlay masks and/or xyxy bboxes / points on rgb (HxWx3) and publish as raw Image."""
+        """Overlay masks and/or xyxy bboxes / points on rgb (HxWx3) and publish raw + compressed Image."""
         mask_list = [] if masks is None else list(masks)
         bbox_list = [] if bboxes is None else [b for b in bboxes if b is not None and len(b) == 4]
         point_list = [] if points is None else [p for p in points if p is not None and len(p) == 2]
-        if self._mask_image_pub is None or (len(mask_list) == 0 and len(bbox_list) == 0 and len(point_list) == 0):
+        if (
+            (self._mask_image_pub is None and self._mask_image_compressed_pub is None)
+            or (len(mask_list) == 0 and len(bbox_list) == 0 and len(point_list) == 0)
+        ):
             return
         t0 = time.time()
         vis = rgb.copy()
@@ -1363,15 +1373,26 @@ class FoundationPoseROS2Node(Node):
             cv2.drawMarker(vis, (x, y), pt_color, markerType=cv2.MARKER_CROSS, markerSize=16, thickness=2)
 
         vis = np.ascontiguousarray(vis)
-        msg = RosImage()
-        msg.header = header
-        msg.height = vis.shape[0]
-        msg.width = vis.shape[1]
-        msg.encoding = "rgb8"
-        msg.is_bigendian = False
-        msg.step = vis.shape[1] * 3
-        msg.data = vis.tobytes()
-        self._mask_image_pub.publish(msg)
+        if self._mask_image_pub is not None:
+            msg = RosImage()
+            msg.header = header
+            msg.height = vis.shape[0]
+            msg.width = vis.shape[1]
+            msg.encoding = "rgb8"
+            msg.is_bigendian = False
+            msg.step = vis.shape[1] * 3
+            msg.data = vis.tobytes()
+            self._mask_image_pub.publish(msg)
+
+        if self._mask_image_compressed_pub is not None:
+            ok, enc = cv2.imencode(".jpg", cv2.cvtColor(vis, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if ok:
+                cmsg = CompressedImage()
+                cmsg.header = header
+                cmsg.format = "jpeg"
+                cmsg.data = enc.tobytes()
+                self._mask_image_compressed_pub.publish(cmsg)
+
         self.get_logger().debug(
             f"Publish mask image: {(time.time()-t0)*1000:.2f} ms "
             f"({len(mask_list)} mask(s), {len(bbox_list)} bbox(es), {len(point_list)} point(s))"
@@ -1891,7 +1912,7 @@ if __name__ == "__main__":
     parser.add_argument("--min_initial_detection_counter", type=int, default=1, help="Minimum initial detection counter.")
     parser.add_argument("--enable_pose_tracking", action="store_true", default=False, help="Enable pose tracking.")
     parser.add_argument("--no_fp", action="store_true", default=False, help="Skip FoundationPose register/track at runtime (still loads models); detection/segmentation only.")
-    parser.add_argument("--publish_mask_image", action="store_true", default=False, help="Publish raw RGB Image with colored detection masks for RViz debug.")
+    parser.add_argument("--publish_mask_image", action="store_true", default=False, help="Publish raw + compressed RGB Image with colored detection masks for RViz debug.")
     parser.add_argument("--fp_verbosity", type=str, default="warning", help="Verbosity level for FoundationPose. Valid: debug, info, warning, error, critical.")
     parser.add_argument("--ros_verbosity", type=str, default="info", help="ROS logger severity (debug/info/warn/error/fatal). Defaults to RCUTILS_LOGGING_SEVERITY or INFO.")
     parser.add_argument("--use_onnx", action="store_true", default=False, help="Use ONNX predictors instead of the default scorer and refiner.")
