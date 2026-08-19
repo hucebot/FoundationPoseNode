@@ -3,7 +3,7 @@
     <General>
       <!-- Define which network interface to use -->
       <Interfaces>
-        <NetworkInterface name="enP2p1s0" priority="1" />
+        <NetworkInterface name="999999" priority="1" />
       </Interfaces>
       <MaxMessageSize>1400B</MaxMessageSize>
 

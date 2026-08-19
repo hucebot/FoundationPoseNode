@@ -41,10 +41,10 @@ until ros2 node list 2>/dev/null | grep -q "/${NAMESPACE}/${CAMERA_NAME}"; do
 done
 echo "[realsense] Node up."
 
-echo "[realsense] Publishing static TF: ${SOURCE_FRAME} -> ${TARGET_FRAME}"
-ros2 run tf2_ros static_transform_publisher \
-  --frame-id "${TARGET_FRAME}" \
-  --child-frame-id "${SOURCE_FRAME}" &
+#echo "[realsense] Publishing static TF: ${SOURCE_FRAME} -> ${TARGET_FRAME}"
+#ros2 run tf2_ros static_transform_publisher \
+#  --frame-id "${TARGET_FRAME}" \
+#  --child-frame-id "${SOURCE_FRAME}" &
 
 TF_PID=$!
 echo "[realsense] Static TF PID: ${TF_PID}"
