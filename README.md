@@ -244,6 +244,9 @@ smallmilk
 smallsanpellegrino
 spam
 ycbmustard
+solevita
+bluecup
+orange
 ```
 
 ## Parameters
