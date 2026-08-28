@@ -521,6 +521,16 @@ OBJECT_KEYS_TO_PARAMETERS = {
               "constraint_pitch_in": None,
               "constraint_roll_in": None},
 
+    "ketchup" : {"mesh_file": "./assets/hackathon3/ketchup/ketchup.obj",
+              "symmetry_x_angles": "",
+              "symmetry_y_angles": "",
+              "symmetry_z_angles": "0,30,60,90,120,150,180,210,240,270,300,330",
+              "target_object": "red bottle",
+              "vlm_prompt": "Detect the red bottle with a white cap",
+              "constraint_yaw_in": 0,
+              "constraint_pitch_in": None,
+              "constraint_roll_in": None},
+
     # hard to find but seems good when found... investigate, maybe a bigger one !
     "minicheese" : {"mesh_file": "./assets/hackathon3/minicheese/minicheese.obj",
                     "symmetry_x_angles": "",
